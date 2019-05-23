@@ -1,0 +1,41 @@
+version(1);
+
+project_name = "moe model converter";
+
+patterns = {
+"*.cpp",
+"*.c",
+"*.sh",
+"*.h",
+"*.fs",
+"*.vs",
+};
+
+blacklist_patterns = {
+".*",
+"GL",
+};
+
+
+load_paths_linux = {
+	{"."},
+	{"../libs/"},
+};
+
+load_paths = {
+	{ load_paths_linux, .os = "linux" },
+};
+
+command_list = {
+	{.name = "build",
+	 .out = "*compilation*", .footer_panel = true, .save_dirty_files = true, .cursor_at_end = false,
+	 .cmd = { {"./build.sh", .os = "linux"},},
+	},
+	{.name = "run",
+	 .out = "*run*", .footer_panel = false, .save_dirty_files = false, .cursor_at_end = true,
+	 .cmd = { {"./convert_gondola.sh", .os = "linux"},},
+	},
+};
+
+fkey_command[1] = "build";
+fkey_command[2] = "run";

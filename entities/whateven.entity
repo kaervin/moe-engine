@@ -1,0 +1,8 @@
+modl
+	sphere.moe
+text
+	Icosphere grey.png
+phys
+	sphere
+		0.0 0.0 0.0
+		1.0

@@ -1,0 +1,9 @@
+modl
+	cube.moe
+text
+	Cube stripe.png
+phys
+	obb
+		0.0 0.0 0.0
+		1.0 1.0 1.0
+		0.0 0.0 0.00 1.0
