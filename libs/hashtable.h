@@ -86,7 +86,7 @@ unsigned int map_lookup_key(Map *m, bool *ok, unsigned int key);
 
 bool map_insert_kv(Map *m, unsigned int key, unsigned int value);
 
-
+void map_remove_key(Map *m, uint key);
 
 #endif /* HASHTABLE_H */
 
@@ -107,6 +107,10 @@ unsigned int crc32_cstring(const char *str) {
 	return (crc32 ^ 0xFFFFFFFF);
 }
 
+void reinit_map(Map *m) {
+	memset(m->t, 0, 0xFFFF*sizeof(struct table_entry));
+} 
+
 Map init_map() {
 	Map m;
 	m.t = (struct table_entry*)malloc(0xFFFF*sizeof(struct table_entry));
@@ -126,7 +130,7 @@ unsigned int map_lookup_key(Map *m, bool *ok, unsigned int key) {
 		*ok = true;
 		return te.value1;
 	}
-	printf("couldn't find the key %i in the table index %i\n", key, table_index);
+	printf("couldn't find the key %u in the table index %u\nfound te.key: %u and %u", key, table_index, te.key0, te.key1);
 	*ok = false;
 	return 0;
 }
@@ -149,6 +153,20 @@ bool map_insert_kv(Map *m, unsigned int key, unsigned int value) {
 	}
 	fprintf( stderr, "key %u with value %u had 2nd collision. INVESTIGATE\n", key, value);
 	return 0;
+};
+
+void map_remove_key(Map *m, uint key) {
+	unsigned int table_index = key & 0x0000FFFF;
+	struct table_entry *te = &m->t[table_index];
+	
+	if (key == te->key0) {
+		te->value0 = 0;
+		return;
+	}
+	if (key == te->key1) {
+		te->value1 = 0;
+		return;
+	}
 };
 
 #endif /* HASHTABLE_IMPLEMENTATION */

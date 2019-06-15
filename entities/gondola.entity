@@ -1,0 +1,10 @@
+modl
+	gondola.moe
+text
+	Cube Material.png
+text
+	Plane Face.png
+phys
+	sphere
+		0.0 0.0 0.0
+		1.0

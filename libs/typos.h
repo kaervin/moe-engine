@@ -4,6 +4,7 @@
 #ifndef TYPOS_H
 #define TYPOS_H
 
+
 typedef struct KeyState {
 	bool initial;
 	bool down;
@@ -26,12 +27,17 @@ typedef struct KeyStruct {
 	KeyState r_key;
 	KeyState t_key;
 	KeyState p_key;
+	KeyState shift_key;
 	
 	KeyState F1_key;
 	KeyState F2_key;
 	KeyState F3_key;
 	KeyState F4_key;
 	KeyState F5_key;
+	KeyState F6_key;
+	KeyState F7_key;
+	KeyState F8_key;
+	KeyState F9_key;
 	
 	KeyState F10_key;
 	
@@ -68,12 +74,18 @@ typedef struct EditorState {
 	int show_dbg;
 	
 	int new_object_prototype_index;
+	bool create_new_point;
 	
 	int edit_object_index;
+	int edit_point_index;
+	char edit_point_string[MAX_NAME_LENGTH]; 
 	
 	bool level_needs_saving;
 	bool level_needs_loading;
 	char level_load_name[MAX_NAME_LENGTH];
+	
+	int show_perf_times;
+	
 } EditorState;
 
 
@@ -227,7 +239,18 @@ Quat lerp_quat(Quat Left, Quat Right, float Time)
     
     return (Result);
 }
-
+bool v3_about_equal(v3 a, v3 b, float radius) {
+	if (!(a.X >= b.X-radius && a.X <= b.X+radius)) {
+		return false;
+	}
+	if (!(a.Y >= b.Y-radius && a.Y <= b.Y+radius)) {
+		return false;
+	}
+	if (!(a.Z >= b.Z-radius && a.Z <= b.Z+radius)) {
+		return false;
+	}
+	return true;
+}
 
 v3 lerp_vec3(v3 Left, v3 Right, float Time)
 {
@@ -328,68 +351,172 @@ unsigned int loadshaders(const char* vShaderCode, const char* fShaderCode, char*
     return shaderProgram;
 }
 
+// new parsing functions
+char * read_file_into_memory_null_terminate(const char *filename) {
+	FILE *f = fopen(filename, "r");
+	if (!f) return 0;
+	fseek(f, 0, SEEK_END);
+	size_t filesize = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	char * result = malloc(filesize+1);
+	fread(result, filesize, 1, f);
+	result[filesize] = 0;
+	fclose(f);
+	return result;
+}
+
+enum Token_Type {
+	TOKEN_EOF,
+	TOKEN_IDENTIFIER,
+	TOKEN_ERROR,
+	
+	TOKEN_OPEN_PAREN,
+	TOKEN_CLOSE_PAREN,
+	TOKEN_STAR,
+};
+
+typedef struct Token {
+	enum Token_Type type;
+	char *text;
+	int length;
+} Token;
+
+typedef struct Tokenizer {
+	char *at;
+} Tokenizer;
+
+bool is_whitespace(char *cp) {
+	char c = *cp;
+	return (((c == ' ') || (c == '\n') || (c == '\t') || (c == '\r')));
+}
+
+bool is_alpha(char *cp) {
+	char c = *cp;
+	return (((c >= '0') && (c <= '9')) || ((c >= 'a') && (c <= 'z')) || ((c >= 'A') && (c <= 'Z')) || (c == '_') || (c == '.') || (c == '-'));
+}
+
+void eat_singleline_comment(Tokenizer *tknzr) {
+	tknzr->at += 2;
+	while(true) {
+		if ((tknzr->at[0] == '\n') || (tknzr->at[0] == 0)) {
+			return;
+		}
+		++tknzr->at;
+	}
+}
+
+void eat_multiline_comment(Tokenizer *tknzr) {
+	tknzr->at += 2;
+	while(true) {
+		if (tknzr->at[0] == 0) {
+			return;
+		}
+		if ((tknzr->at[0] == '*') && (tknzr->at[1] == '/')) {
+			tknzr->at += 2;
+			return;
+		}
+		++tknzr->at;
+	}
+}
+
+void eat_all_whitespace(Tokenizer *tknzr) {
+	
+	while(true) {
+		if(is_whitespace(tknzr->at)) {
+			++tknzr->at;
+			continue;
+		}
+		
+		if ((tknzr->at[0] == '/') && (tknzr->at[1] == '/')) {
+			eat_singleline_comment(tknzr);
+			continue;
+		}
+		
+		if ((tknzr->at[0] == '/') && (tknzr->at[1] == '*')) {
+			eat_multiline_comment(tknzr);
+			continue;
+		}
+		
+		return;
+	}
+}
+
+bool does_identifier_match(Token token, char *str) {
+	
+	int i = 0;
+	
+	for(; i < token.length; i++) {
+		if (str[i] != token.text[i]) {
+			return false;
+		}
+	}
+	
+	if (str[i] == 0) {
+		return true;
+	}
+	return false;
+}
+
+int token_to_cstr(char *buf, unsigned int buf_size, Token token) {
+	if (token.length >= buf_size) {
+		return 0;
+	}
+	return sprintf(buf, "%.*s", token.length, token.text);
+}
+
+Token parse_alpha(Tokenizer *tknzr) {
+	Token token;
+	token.type = TOKEN_IDENTIFIER;
+	token.length = 0;
+	token.text = tknzr->at;
+	
+	while(is_alpha(tknzr->at)) {
+		++token.length;
+		++tknzr->at;
+	}
+	return token;
+}
+
+Token get_token(Tokenizer *tknzr) {
+	Token token;
+	eat_all_whitespace(tknzr);
+	
+	token.text = tknzr->at;
+	token.length = 0;
+	
+	if (tknzr->at[0] == 0) {
+		token.type = TOKEN_EOF;
+		return token;
+	}
+	
+	if (is_alpha(tknzr->at)) {
+		token = parse_alpha(tknzr);
+		return token;
+	}
+	
+	token.length = 1;
+	
+	if (tknzr->at[0] == '(') {
+		token.type = TOKEN_OPEN_PAREN;
+	}
+	else if (tknzr->at[0] == ')') {
+		token.type = TOKEN_CLOSE_PAREN;
+	}
+	else if (tknzr->at[0] == '*') {
+		token.type = TOKEN_STAR;
+	}
+	else {
+		token.type = TOKEN_ERROR;
+	}
+	++tknzr->at;
+	return token;
+}
+
+
+
 // some parsing functions
 // NOTE: all of them are unsafe, so don't parse anything that you aren't sure of 
 
-// sets trailing newlines or spaces to \0
-void clean_word(char *word) {
-	int char_counter = 0;
-	char *current_char = word;
-	
-	while(current_char != '\0') {
-		if (*current_char == ' ' || *current_char == '\n' || *current_char == '\t') {
-			word[char_counter] = '\0';
-			return;
-		}
-		char_counter++;
-		current_char = &word[char_counter];
-	}
-} 
-
-// modifies the line, so watch out
-// return the number of words in the line and stores pointers to the individual words in word_pointers
-int split_line_into_words(char *line, char **word_pointers, int max_words) {
-	
-	int num_words = 0;
-	
-	int char_counter = 0;
-	char *current_char = line;
-	
-	// consume everything until a word starts, or until there is some end signifier
-	while(*current_char != '\n' || *current_char != '\0') {
-		if(*current_char == ' ' || *current_char == '\t') {
-			char_counter++;
-			current_char = &line[char_counter];
-		} else {
-			word_pointers[num_words] = current_char;
-			num_words++;
-			char_counter++;
-			current_char = &line[char_counter];
-			break;
-		}
-	}
-	
-	if (max_words == 1) {
-		return num_words;
-	}
-	
-	// now break up the following words
-	while(*current_char != '\n' || *current_char != '\0') {
-		if (*current_char == ' ') {
-			*current_char = '\0';
-			word_pointers[num_words] = &line[char_counter+1];
-			num_words++;
-			if (num_words >= max_words) {
-				return num_words;
-			}
-			
-		}
-		char_counter++;
-		current_char = &line[char_counter];
-	}
-	
-	return num_words;
-};
 
 // compares the tailing characters to the tail and returns true if both of them have the same characters
 bool compare_tail(char *to_compare, char *tail) {
@@ -428,55 +555,217 @@ bool compare_tail(char *to_compare, char *tail) {
 	return true;
 }
 
+int parse_int_token(Tokenizer *tknzr) {
+	int n = 0;
+	Token number_token;
+	char number_buf[1024];
+	bool ok;
+	
+	number_token = get_token(tknzr);
+	ok = token_to_cstr(number_buf, 1024, number_token);
+	if (!ok) {
+		return n;
+	}
+	n = atoi(number_buf);
+	return n;
+}
+
+
+float parse_float_token(Tokenizer *tknzr) {
+	float n = 0.0f;
+	Token number_token;
+	char number_buf[1024];
+	bool ok;
+	
+	number_token = get_token(tknzr);
+	ok = token_to_cstr(number_buf, 1024, number_token);
+	if (!ok) {
+		return n;
+	}
+	n = atof(number_buf);
+	return n;
+}
+
+v3 parse_vec3_token(Tokenizer *tknzr) {
+	v3 vec = vec3(0.0f, 0.0f, 0.0f);
+	bool ok;
+	Token number_token;
+	char number_buf[1024];
+	
+	number_token = get_token(tknzr);
+	ok = token_to_cstr(number_buf, 1024, number_token);
+	if (!ok) {
+		return vec;
+	}
+	vec.X = atof(number_buf);
+	
+	
+	number_token = get_token(tknzr);
+	ok = token_to_cstr(number_buf, 1024, number_token);
+	if (!ok) {
+		return vec;
+	}
+	vec.Y = atof(number_buf);
+	
+	
+	number_token = get_token(tknzr);
+	ok = token_to_cstr(number_buf, 1024, number_token);
+	if (!ok) {
+		return vec;
+	}
+	vec.Z = atof(number_buf);
+	return vec;
+}
+
+
+Quat parse_quaternion_token(Tokenizer *tknzr) {
+	Quat quat = quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+	bool ok;
+	Token number_token;
+	char number_buf[1024];
+	
+	number_token = get_token(tknzr);
+	ok = token_to_cstr(number_buf, 1024, number_token);
+	if (!ok) {
+		return quat;
+	}
+	quat.X = atof(number_buf);
+	
+	number_token = get_token(tknzr);
+	ok = token_to_cstr(number_buf, 1024, number_token);
+	if (!ok) {
+		return quat;
+	}
+	quat.Y = atof(number_buf);
+	
+	number_token = get_token(tknzr);
+	ok = token_to_cstr(number_buf, 1024, number_token);
+	if (!ok) {
+		return quat;
+	}
+	quat.Z = atof(number_buf);
+	
+	number_token = get_token(tknzr);
+	ok = token_to_cstr(number_buf, 1024, number_token);
+	if (!ok) {
+		return quat;
+	}
+	quat.W = atof(number_buf);
+	
+	return quat;
+}
+
+/*
+// sets trailing newlines or spaces to \0
+void clean_word(char *word) {
+ int char_counter = 0;
+ char *current_char = word;
+ 
+ while(current_char != '\0') {
+  if (*current_char == ' ' || *current_char == '\n' || *current_char == '\t') {
+   word[char_counter] = '\0';
+   return;
+  }
+  char_counter++;
+  current_char = &word[char_counter];
+ }
+} 
+
+// modifies the line, so watch out
+// return the number of words in the line and stores pointers to the individual words in word_pointers
+int split_line_into_words(char *line, char **word_pointers, int max_words) {
+
+ int num_words = 0;
+ 
+ int char_counter = 0;
+ char *current_char = line;
+ 
+ // consume everything until a word starts, or until there is some end signifier
+ while(*current_char != '\n' || *current_char != '\0') {
+  if(*current_char == ' ' || *current_char == '\t') {
+   char_counter++;
+   current_char = &line[char_counter];
+  } else {
+   word_pointers[num_words] = current_char;
+   num_words++;
+   char_counter++;
+   current_char = &line[char_counter];
+   break;
+  }
+ }
+ 
+ if (max_words == 1) {
+  return num_words;
+ }
+ 
+ // now break up the following words
+ while(*current_char != '\n' || *current_char != '\0') {
+  if (*current_char == ' ') {
+   *current_char = '\0';
+   word_pointers[num_words] = &line[char_counter+1];
+   num_words++;
+   if (num_words >= max_words) {
+ return num_words;
+   }
+   
+  }
+  char_counter++;
+  current_char = &line[char_counter];
+ }
+ 
+ return num_words;
+};
+
 
 float parse_float(char *line) {
-	float f = 0.0f;
-	char * words[1];
-	
-	int num_words = split_line_into_words(line, words, 1);
-	if (num_words != 1) {
-		printf("number of words isn't 1 for float  %s\n", line);
-		return f;
-	}
-	
-	f = atof(words[0]);
-	return f;
+ float f = 0.0f;
+ char * words[1];
+ 
+ int num_words = split_line_into_words(line, words, 1);
+ if (num_words != 1) {
+  printf("number of words isn't 1 for float  %s\n", line);
+  return f;
+ }
+ 
+ f = atof(words[0]);
+ return f;
 }
 
 
 v3 parse_vec3(char *line) {
-	v3 vec = vec3(0.0f, 0.0f, 0.0f);
-	char * words[3];
-	
-	int num_words = split_line_into_words(line, words, 3);
-	if (num_words != 3) {
-		printf("number of words isn't 3 for vector  %s\n", line);
-		return vec;
-	}
-	
-	vec.X = atof(words[0]);
-	vec.Y = atof(words[1]);
-	vec.Z = atof(words[2]);
-	return vec;
+ v3 vec = vec3(0.0f, 0.0f, 0.0f);
+ char * words[3];
+ 
+ int num_words = split_line_into_words(line, words, 3);
+ if (num_words != 3) {
+  printf("number of words isn't 3 for vector  %s\n", line);
+  return vec;
+ }
+ 
+ vec.X = atof(words[0]);
+ vec.Y = atof(words[1]);
+ vec.Z = atof(words[2]);
+ return vec;
 }
 
 Quat parse_quaternion(char *line) {
-	Quat quat = quaternion(0.0f, 0.0f, 0.0f, 1.0f);
-	char * words[4];
-	
-	int num_words = split_line_into_words(line, words, 4);
-	if (num_words != 4) {
-		printf("number of words isn't 4 for quaternion  %s\n", line);
-		return quat;
-	}
-	
-	quat.X = atof(words[0]);
-	quat.Y = atof(words[1]);
-	quat.Z = atof(words[2]);
-	quat.W = atof(words[3]);
-	
-	return normalize_quat(quat);
+ Quat quat = quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+ char * words[4];
+ 
+ int num_words = split_line_into_words(line, words, 4);
+ if (num_words != 4) {
+  printf("number of words isn't 4 for quaternion  %s\n", line);
+  return quat;
+ }
+ 
+ quat.X = atof(words[0]);
+ quat.Y = atof(words[1]);
+ quat.Z = atof(words[2]);
+ quat.W = atof(words[3]);
+ 
+ return normalize_quat(quat);
 }
+*/
 
 Quat euler_to_quaternion(float roll, float pitch, float yaw) // yaw (Z), pitch (Y), roll (X)
 {

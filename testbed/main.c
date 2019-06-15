@@ -7,6 +7,17 @@
 #include <dirent.h>
 #include <assert.h>
 #include <dlfcn.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+typedef unsigned int uint;
+
+#define PERF_MAIN 1
+//#define PERF_GAMESTEP 0
+#include "perf_count.h"
+
+#define HASHTABLE_IMPLEMENTATION
+#include "hashtable.h"
 
 #define BAKA_IMPLEMENTATION
 #include "baka.h"
@@ -14,6 +25,7 @@
 #define MUSHISHI_IMPLEMENTATION
 #include "mushishi.h"
 
+#define RENDER_TYPES
 #define RENDER_IMPLEMENTATION
 #include "render_basic.h"
 
@@ -30,34 +42,23 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-#define HASHTABLE_IMPLEMENTATION
-#include "hashtable.h"
-
 #include "glfw3.h"
 #include "GL/gl3w.h"
 
-#define NK_INCLUDE_FIXED_TYPES
-#define NK_INCLUDE_STANDARD_IO
-#define NK_INCLUDE_STANDARD_VARARGS
-#define NK_INCLUDE_DEFAULT_ALLOCATOR
-#define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
-#define NK_INCLUDE_FONT_BAKING
-#define NK_INCLUDE_DEFAULT_FONT
-#define NK_MEMSET
-//#define NK_IMPLEMENTATION
+#include <assert.h>
+#define RENDERER_IMPLEMENTATION
+#include "UI/renderer.h"
+#include "UI/microui.h"
 
-//#define NK_KEYSTATE_BASED_INPUT
-#include "UI/nuklear.h"
-#define NK_GLFW_GL3_IMPLEMENTATION
-#include "UI/nuklear_glfw_gl3.h"
-
-#define WINDOW_WIDTH 1300
-#define WINDOW_HEIGHT 800
+#define WINDOW_WIDTH 800
+#define WINDOW_HEIGHT 600
 
 #define MAX_VERTEX_BUFFER 512 * 1024
 #define MAX_ELEMENT_BUFFER 128 * 1024
 
 #define MAX_NAME_LENGTH 128
+#define MAX_NUM_POINTS 1024
+#define MAX_GAME_POINT_CHARS 512 * 1024
 
 #define LEVEL_DIR "../levels/"
 #define LEVEL_END ".level"
@@ -66,6 +67,9 @@
 #include "level_static.h"
 
 
+#include "fpstruct.h"
+FP_Struct fp_struct;
+#include "ffill.h"
 // --- globals ---
 
 
@@ -89,11 +93,24 @@ char * dl_error_string;
 
 void (*stepfunc) (Game_Struct*);
 
-void (*init_stepfunc) (Game_Struct * game, struct texture_asset ta_face4_p, struct texture_asset ta_angry_p);
+void (*init_stepfunc) (Game_Struct * game);
 
 Game_Struct game;
 
+void example_func() {
+	printf("hello world\n");
+}
+
 void load_level_lib(char * level_name) {
+	printf("level to be loaded: %s\n", level_name);
+	// ---
+	printf("%p\n", animate_model_test);
+	printf("%p\n", solve_IK_fabrik);
+	printf("%p\n", get_model_from_crc32);
+	
+	game.sample_func_p = example_func;
+	fill_function_pointers();
+	game.fp_struct = fp_struct;
 	
 	FILE *fp;
 	int status;
@@ -153,8 +170,7 @@ void load_level_lib(char * level_name) {
 		return;
 	}
 	
-	
-	init_stepfunc = (void (*)(Game_Struct * game, struct texture_asset ta_face4_p, struct texture_asset ta_angry_p)) dlsym(dl_handle, "init_step");
+	init_stepfunc = (void (*)(Game_Struct * game)) dlsym(dl_handle, "init_step");
 	
 	if (init_stepfunc == NULL) {
 		dl_error_string = dlerror();
@@ -163,9 +179,72 @@ void load_level_lib(char * level_name) {
 		return;
 	}
 	
-	init_stepfunc(&game, ta_face4, ta_angry);
+	init_stepfunc(&game);
+}
+
+static const char key_map[256] = {
+	[ GLFW_KEY_LEFT_SHIFT          & 0xff ] = MU_KEY_SHIFT,
+	[ GLFW_KEY_RIGHT_SHIFT         & 0xff ] = MU_KEY_SHIFT,
+	[ GLFW_KEY_LEFT_CONTROL        & 0xff ] = MU_KEY_CTRL,
+	[ GLFW_KEY_RIGHT_CONTROL       & 0xff ] = MU_KEY_CTRL,
+	[ GLFW_KEY_LEFT_ALT            & 0xff ] = MU_KEY_ALT,
+	[ GLFW_KEY_RIGHT_ALT           & 0xff ] = MU_KEY_ALT,
+	[ GLFW_KEY_ENTER               & 0xff ] = MU_KEY_RETURN,
+	[ GLFW_KEY_BACKSPACE           & 0xff ] = MU_KEY_BACKSPACE,
+};
+
+
+static int text_width(mu_Font font, const char *text, int len) {
+	if (len == -1) { len = strlen(text); }
+	return r_get_text_width(text, len);
+}
+
+static int text_height(mu_Font font) {
+	return r_get_text_height();
+}
+
+static void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
+{
+	mu_input_mousemove(game.mu_ctx, xpos, ypos);
+}
+
+void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
+{
+	double xpos, ypos;
+	glfwGetCursorPos(window, &xpos, &ypos);
+	
+    if (action == GLFW_PRESS) {
+		mu_input_mousedown(game.mu_ctx, xpos, ypos, button+1);
+	}
+	
+    if (action == GLFW_RELEASE) {
+		mu_input_mouseup(game.mu_ctx, xpos, ypos, button+1);
+	}
 	
 }
+
+void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
+{
+	mu_input_scroll(game.mu_ctx, 0, yoffset * -30);
+}
+
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
+{
+    
+	int c = key_map[key & 0xff];
+	if (c && action == GLFW_PRESS) { mu_input_keydown(game.mu_ctx, c); }
+	if (c && action == GLFW_RELEASE) { mu_input_keyup(game.mu_ctx, c);   }
+	
+}
+
+void character_callback(GLFWwindow* window, unsigned int codepoint)
+{
+	char itext[5];
+	memcpy(itext, &codepoint, 4);
+	itext[4] = 0;
+	mu_input_text(game.mu_ctx, itext);
+}
+
 
 bool Init(Game_Struct *game)
 {
@@ -201,16 +280,7 @@ bool Init(Game_Struct *game)
 	glfwSetInputMode(game->window, GLFW_STICKY_KEYS, 1);
 	glfwSwapInterval(1);
 	
-	// --- Nuklear UI stuff
-	struct nk_colorf bg;
-	game->ctx = nk_glfw3_init(game->window, NK_GLFW3_INSTALL_CALLBACKS);
-	{
-		struct nk_font_atlas *atlas;
-		nk_glfw3_font_stash_begin(&atlas);
-		nk_glfw3_font_stash_end();
-	}
-	
-	bg.r = 0.10f, bg.g = 0.18f, bg.b = 0.24f, bg.a = 1.0f;
+	printf("here\n");
 	
 	// --- more init stuff
 	glDisable(GL_DEPTH_TEST);
@@ -232,6 +302,21 @@ bool Init(Game_Struct *game)
 	// joystick stuff
 	int joy1 = glfwJoystickPresent(GLFW_JOYSTICK_1);
 	printf("joystick present: %i\n", joy1);
+	
+	ui_glfw3_device_create(game->window);
+	r_init();
+	
+	/* init microui */
+	game->mu_ctx = malloc(sizeof(mu_Context));
+	mu_init(game->mu_ctx);
+	game->mu_ctx->text_width = text_width;
+	game->mu_ctx->text_height = text_height;
+	
+	glfwSetCursorPosCallback(game->window, cursor_position_callback);
+	glfwSetMouseButtonCallback(game->window, mouse_button_callback);
+	glfwSetKeyCallback(game->window, key_callback);
+	glfwSetCharCallback(game->window, character_callback);
+	glfwSetScrollCallback(game->window, scroll_callback);
 	
 	return true;
 }
@@ -255,6 +340,8 @@ int main(int argc, char *argv[]) {
 	
 	if (!Init(&game)) { return -1;}
 	
+	
+	
 	// gather all the physical obj defintions
 	PhysicsMeshStack phys_mesh_stack = gather_physics_meshes();
 	
@@ -271,7 +358,6 @@ int main(int argc, char *argv[]) {
 	GenModel gondola_model = get_model_from_crc32(&model_memory, &ok, crc32_cstring("gondola.moe"));
 	AnimReturn ar_gondola = load_animation_test("../models/gondola.moa");
 	
-	game.assets.tex_ass_man = gather_texture_assets();
 	
 	// the prototype NodeStack is for storing the Nodes of the prototypical Objects,
 	// meaning the objects from which the actual ingame objects are instanced
@@ -286,33 +372,51 @@ int main(int argc, char *argv[]) {
 	prototype_ns.name_indices = (int *)malloc(sizeof(int)*1000);
 	
 	// prototype_static_objects is for storing the physics of the static level objects
-	baka_StaticObjects prototype_static_objects = init_StaticObjectsStack(10000);
-	
+	baka_Shape_Stack prototype_static_objects = baka_init_shape_stack(10000);
+    
+    
+    Texture_Asset_Manager texa = gather_texture_assets();
+	// TODO: really annoying bug, if we don't insert the printf we get an illegal instruction (sometimes)
+	printf("dude\n");
+    game.assets.tex_ass_man = texa;
 	// here we actually gather and create all the prototypes from the entities directory
 	PrototypeStack prototypes = gather_static_entity_prototypes(&model_memory, &phys_mesh_stack, &prototype_static_objects,&game.assets.tex_ass_man, &prototype_ns);
-	
+	game.assets.prototypes = prototypes;
 	// prepare the graphics buffers
 	// the second arguement is basically the maximum amount of nodes
 	game.rendering_context = prepare_ressources_gen(model_memory.mesh_stack, &game.assets.tex_ass_man, 30000);
 	
 	game.rendering_context.projection = BuildProjectionMatrix((float)WINDOW_WIDTH/(float)WINDOW_HEIGHT,0.9f,0.2f,10000.0f);
 	
-	game.assets.prototypes = prototypes;
+	//game.assets.prototypes = prototypes;
 	game.assets.prototype_static_objects = prototype_static_objects;
 	game.assets.model_memory = model_memory;
 	
 	// ns instances is basically the memory-arena/stack where all the instantiated game-objects are stored
 	// this is whats primarily worked with in the actual game loop
-	game.ns_instances.max_n = 1000;
+	game.ns_instances.max_n = 10000;
 	game.ns_instances.next_n = 0;
-	game.ns_instances.nodes = (Node *)malloc( sizeof(Node) * 1000 );
-	game.ns_instances.parent = (int *)malloc( sizeof(int) * 1000 );
-	game.ns_instances.texture_assets = (texture_asset *)malloc( sizeof(texture_asset)*1000 );
+	game.ns_instances.nodes = (Node *)malloc( sizeof(Node) * 10000 );
+	game.ns_instances.parent = (int *)malloc( sizeof(int) * 10000 );
+	game.ns_instances.texture_assets = (texture_asset *)malloc( sizeof(texture_asset)*10000 );
 	game.ns_instances.names = model_memory.node_stack.names; // NOTE: for now we just do this
 	// When we systemize everything in the compression phase, I will think of something better
-	game.ns_instances.name_indices = (int *)malloc(sizeof(int)*1000);
+	game.ns_instances.name_indices = (int *)malloc(sizeof(int)*10000);
 	
 	game.level_static = init_level_static();
+	
+	game.next_model_to_render = 0;
+	game.max_models_to_render = 10000;
+	game.models_to_render = malloc(sizeof(GenModel)*game.max_models_to_render);
+	game.models_to_render_scales = malloc(sizeof(v3)*game.max_models_to_render);
+	
+	game.game_points.point_names.chars = malloc(MAX_GAME_POINT_CHARS);
+	game.game_points.point_names.max_char = MAX_GAME_POINT_CHARS;
+	game.game_points.point_names.next_string = 0;
+	game.game_points.next_point = 0;
+	game.game_points.max_point = MAX_NUM_POINTS;
+	game.game_points.points = malloc(sizeof(Game_Point)*MAX_NUM_POINTS);
+	game.game_points.map = init_map();
 	
 	// create some terrain
 	game.terra = terra_new_from_image("../heightmaps/heightmap16.png", 10.0f, -250.0f*10.0f, -250.0f*10.0f);
@@ -336,7 +440,7 @@ int main(int argc, char *argv[]) {
 	
 	game.terra.projection = game.dbg_ctx.projection;
 	
-	game.cs.camera_point = vec3(0.0f, 0.0f, 25.0f);
+	game.cs.camera_point = vec3(0.0f, 5.0f, 25.0f);
 	game.cs.camera_right = vec3(1.0f, 0.0f, 0.0f);
 	game.cs.projection = game.dbg_ctx.projection;
 	game.cs.inv_projection = inverse_projection_matrix(game.dbg_ctx.projection);
@@ -353,16 +457,10 @@ int main(int argc, char *argv[]) {
 	game.current_time = 0.0;
 	game.last_time = 0.0;
 	
-	// Where we save our strings, currently used for the UI, 
-	// may become useful for other stuff too
-	game.string_stack.chars = (char *)malloc(sizeof(char)*10000);
-	game.string_stack.next_string = 0;
-	
 	// Initialize stuff in the player struct
 	// TODO: move this out of here. this should completely be the responsobilty of the loaded game code
 	game.ps.character_point = vec3(0.0f, 5.0f, 0.0f);
 	game.ps.character_model_point = game.ps.character_point;
-	game.ps.character_downwards_speed = 0.0f;
 	
 	game.ps.relative_character_ray_origin = vec3(0.0f, 3.0f, 0.0f);
 	game.ps.character_ray_direction = vec3(0.0f, -1.0f, 0.0f);
@@ -376,7 +474,7 @@ int main(int argc, char *argv[]) {
 	
 	game.ps.player_capsule.p = vec3(0.0f, 1.4f, 0.0f);
 	game.ps.player_capsule.q = vec3(0.0f, -0.0f, 0.0f);
-	game.ps.player_capsule.radius = 1.0f;
+	game.ps.player_capsule.radius = 1.2f;
 	game.ps.player_capsule.num_contacts = 0;
 	
 	game.ps.player_left_foot_fabrik_mix = 0.0f;
@@ -394,42 +492,23 @@ int main(int argc, char *argv[]) {
 	
 	// Init stuff in the Edit struct
 	game.es.edit_object_index = -1;
+	game.es.edit_point_index = -1;
 	game.es.new_object_prototype_index = -1;
 	game.es.show_dbg = false;
 	game.es.plane_height = 0.0f;
 	
-	// init some test collision capsules
-	game.num_cap = 10;
-	baka_capsule caps[10];
-	v3 cap_positions[10];
-	Quat cap_rotations[10];
-	
-	game.caps = caps;
-	game.cap_positions = cap_positions;
-	game.cap_rotations = cap_rotations;
-	
-	// NOTE: spot 0 is reserved for the player capsule to be copied into
-	// have to think about a good way to make this better...
-	// anyway, this is pretty temporary in the first place anyway
-	for (int i = 1; i < 10; i++) {
-		game.caps[i].p = vec3(0.0, -1.0, 0.0);
-		game.caps[i].q = vec3(0.0, 1.0, 0.0);
-		game.caps[i].radius = 0.5 * i;
-		game.caps[i].num_contacts = 0;
-		
-		game.cap_positions[i] = vec3(0.0, 0.0, -5.0 * i);
-		game.cap_rotations[i] = quaternion(0.0, 0.0, 0.0, 1.0);
-	}
-	
 	game.low_fps_mode = 0;
 	strcpy(game.level_to_be_loaded, "testlevel1");
 	game.should_reload_lib = 1;
-	
+	game.es.show_perf_times = 0;
 	// load the game code from the dynamic library
 	
 	printf("start while \n\n");
+	bool should_show_performance_times = false;
 	
 	while (!glfwWindowShouldClose(game.window)) {
+		START_TIME;
+		mu_begin(game.mu_ctx);
 		
 		glClearColor(0.03, 0.03, 0.32, 1.0);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -457,23 +536,11 @@ int main(int argc, char *argv[]) {
 			game.rendering_context,
 			game.ns_instances,
 			game.assets.model_memory.skin_stack,
-			game.level_static.genmodels,
-			game.level_static.scales,
-			game.level_static.next_level_entity);
-		
-		render_genmodels(
-			game.rendering_context,
-			game.ns_instances,
-			game.assets.model_memory.skin_stack,
-			&game.ps.instantiated_gondola,
-			&game.ps.gondola_scale,
-			1);
-		
+			game.models_to_render,
+			game.models_to_render_scales,
+			game.next_model_to_render);
 		
 		render_skeleton(&game.ns_instances, &game.ps.instantiated_gondola);
-		
-		// NUKLEAR GUI TEST STUFF
-		nk_glfw3_new_frame();
 		
 		if (game.es.show_dbg) {
 			glDisable(GL_CULL_FACE);
@@ -488,16 +555,82 @@ int main(int argc, char *argv[]) {
 		mush_empty_list(dbg_list);
 		mush_empty_list(dbg_list_non_cleared);
 		
-		nk_glfw3_render(NK_ANTI_ALIASING_OFF, MAX_VERTEX_BUFFER, MAX_ELEMENT_BUFFER);
 		
+		if (game.es.show_perf_times) {
+			static mu_Container window;
+			
+			/* init window manually so we can set its position and size */
+			if (!window.inited) {
+				mu_init_window(game.mu_ctx, &window, 0);
+				window.rect = mu_rect(WINDOW_WIDTH-600, 5, 250, 150);
+			}
+			
+			if (mu_begin_window_ex(game.mu_ctx, &window, "Perf", MU_OPT_NOCLOSE | MU_OPT_NOTITLE)) {
+				
+				mu_layout_row(game.mu_ctx, 1, (int[]) { 300 }, 0);
+				
+				char temp_buf[1024];
+				
+				for (int i = 0; i < __COUNTER__; i++) {
+					Perf_Measurement p = perf_measurements[i];
+					if (p.fnc_name == NULL) continue;
+					sprintf(temp_buf, "%f %lu %f %s\n", p.time, p.hit, (p.time/p.hit), p.fnc_name);
+					mu_label(game.mu_ctx, temp_buf);
+				}
+				for (int i = 0; i < game.num_gamestep_perf_msr; i++) {
+					Perf_Measurement p = game.gamestep_perf_msr[i];
+					if (p.fnc_name == NULL) continue;
+					sprintf(temp_buf, "%f %lu %f %s\n", p.time, p.hit, (p.time/p.hit), p.fnc_name);
+					mu_label(game.mu_ctx, temp_buf);
+				}
+				
+				for (int i = 0; i < __COUNTER__; i++) {
+					perf_measurements[i].time = 0.0f;
+					perf_measurements[i].rdtsc_stamp = 0;
+					perf_measurements[i].fnc_name = NULL;
+					perf_measurements[i].hit = 0;
+				}
+				for (int i = 0; i < game.num_gamestep_perf_msr; i++) {
+					game.gamestep_perf_msr[i].time = 0.0f;
+					game.gamestep_perf_msr[i].rdtsc_stamp = 0;
+					game.gamestep_perf_msr[i].fnc_name = NULL;
+					game.gamestep_perf_msr[i].hit = 0;
+				}
+				mu_end_window(game.mu_ctx);
+			}
+			/*
+   printf("main stuff %p\n", perf_measurements);
+   
+   printf("gamestep stuff %p\n", game.gamestep_perf_msr);
+   */
+		}
+		
+		mu_end(game.mu_ctx);
+		
+		//r_clear(mu_color(bg[0], bg[1], bg[2], 255));
+		mu_Command *cmd = NULL;
+		
+		while (mu_next_command(game.mu_ctx, &cmd)) {
+			switch (cmd->type) {
+				case MU_COMMAND_TEXT: r_draw_text(cmd->text.str, cmd->text.pos, cmd->text.color); break;
+				case MU_COMMAND_RECT: r_draw_rect(cmd->rect.rect, cmd->rect.color); break;
+				case MU_COMMAND_ICON: r_draw_icon(cmd->icon.id, cmd->icon.rect, cmd->icon.color); break;
+				case MU_COMMAND_CLIP: r_set_clip_rect(cmd->clip.rect); break;
+			}
+		}
+		
+		r_present();
+		
+		END_TIME;
 		glfwSwapBuffers(game.window);			
 		if (game.low_fps_mode) {
 			sleep(1);
 		}
 		glfwPollEvents();
 		
-		
 	}
 	glfwTerminate();	
 	return 0;
 }
+
+Perf_Measurement perf_measurements[__COUNTER__];

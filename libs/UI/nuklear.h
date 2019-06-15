@@ -3077,8 +3077,8 @@ NK_API int nk_button_pop_behavior(struct nk_context*);
  * ============================================================================= */
 NK_API int nk_check_label(struct nk_context*, const char*, int active);
 NK_API int nk_check_text(struct nk_context*, const char*, int,int active);
-NK_API unsigned nk_check_flags_label(struct nk_context*, const char*, unsigned int flags, unsigned int value);
-NK_API unsigned nk_check_flags_text(struct nk_context*, const char*, int, unsigned int flags, unsigned int value);
+NK_API unsigned int nk_check_flags_label(struct nk_context*, const char*, unsigned int flags, unsigned int value);
+NK_API unsigned int nk_check_flags_text(struct nk_context*, const char*, int, unsigned int flags, unsigned int value);
 NK_API int nk_checkbox_label(struct nk_context*, const char*, int *active);
 NK_API int nk_checkbox_text(struct nk_context*, const char*, int, int *active);
 NK_API int nk_checkbox_flags_label(struct nk_context*, const char*, unsigned int *flags, unsigned int value);
@@ -13662,6 +13662,7 @@ nk_font_atlas_bake(struct nk_font_atlas *atlas, int *width, int *height,
         !atlas->permanent.alloc || !atlas->permanent.free)
         return 0;
 
+
 #ifdef NK_INCLUDE_DEFAULT_FONT
     /* no font added so just use default font */
     if (!atlas->font_num)
@@ -13690,7 +13691,7 @@ nk_font_atlas_bake(struct nk_font_atlas *atlas, int *width, int *height,
     if (!nk_font_bake_pack(baker, &img_size, width, height, &atlas->custom,
         atlas->config, atlas->font_num, &atlas->temporary))
         goto failed;
-
+	
     /* allocate memory for the baked image font atlas */
     atlas->pixel = atlas->temporary.alloc(atlas->temporary.userdata,0, img_size);
     NK_ASSERT(atlas->pixel);
@@ -13700,9 +13701,10 @@ nk_font_atlas_bake(struct nk_font_atlas *atlas, int *width, int *height,
     /* bake glyphs and custom white pixel into image */
     nk_font_bake(baker, atlas->pixel, *width, *height,
         atlas->glyphs, atlas->glyph_count, atlas->config, atlas->font_num);
+	
     nk_font_bake_custom_data(atlas->pixel, *width, *height, atlas->custom,
             nk_custom_cursor_data, NK_CURSOR_DATA_W, NK_CURSOR_DATA_H, '.', 'X');
-
+		
     if (fmt == NK_FONT_ATLAS_RGBA32) {
         /* convert alpha8 image into rgba32 image */
         void *img_rgba = atlas->temporary.alloc(atlas->temporary.userdata,0,
@@ -13715,7 +13717,7 @@ nk_font_atlas_bake(struct nk_font_atlas *atlas, int *width, int *height,
     }
     atlas->tex_width = *width;
     atlas->tex_height = *height;
-
+	
     /* initialize each font */
     for (font_iter = atlas->fonts; font_iter; font_iter = font_iter->next) {
         struct nk_font *font = font_iter;

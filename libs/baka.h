@@ -28,7 +28,7 @@ typedef struct baka_capsule{
 	int num_contacts;
 	baka_contact_static static_contacts[MAX_CONTACTS];
 	// TODO: temporarily we store dynamic contacts here the same way we do static ones
-	// but we could do it in a different 
+	// but we could do it in a different way
 	int num_dyn_contacts;
 	baka_contact_static dyn_contacts[MAX_CONTACTS];
 } baka_capsule;
@@ -1539,7 +1539,33 @@ bool baka_raycast_obb_get_normal(v3 ray_origin, v3 ray_direction, baka_OBB obb, 
 	
 }
 
-typedef struct baka_static_object {
+// simple stack macro 
+#define STACKMACRO(TYPE, FNAME)\
+typedef struct TYPE##_Stack {\
+	TYPE *els;\
+	uint max;\
+	uint num;\
+} TYPE##_Stack;\
+\
+TYPE##_Stack baka_init_##FNAME(int number) {\
+	TYPE##_Stack stack;\
+	stack.els = malloc(number * sizeof(TYPE));\
+	stack.num = 0;\
+	stack.max = number;\
+	return stack;\
+}\
+\
+bool baka_push_##FNAME(TYPE##_Stack *stack, TYPE el) {\
+	if (stack->num >= stack->max) {\
+		return 0;\
+	}\
+	stack->els[stack->num] = el;\
+	stack->num++;\
+	return 1;\
+}\
+\
+
+typedef struct baka_Shape {
 	char type_id;
 	union {
 		baka_AABB aabb;
@@ -1548,35 +1574,9 @@ typedef struct baka_static_object {
 		baka_triangle tri;
 	};
 	
-} baka_static_object;
+} baka_Shape;
 
-typedef struct baka_StaticObjects {
-	baka_static_object *objects;
-	uint max_objects;
-	uint num_objects;
-	
-} baka_StaticObjects;
-
-baka_StaticObjects init_StaticObjectsStack(int number) {
-	baka_StaticObjects objects; 
-	
-	objects.objects = malloc(number * sizeof(baka_static_object));
-	objects.num_objects = 0;
-	objects.max_objects = number;
-	
-	return objects;
-}
-
-bool baka_push_static_object(baka_StaticObjects *objects, baka_static_object stat_object) {
-	if (objects->num_objects >= objects->max_objects) {
-		return 0;
-	}
-	
-	objects->objects[objects->num_objects] = stat_object;
-	objects->num_objects++;
-	return 1;
-}
-
+STACKMACRO(baka_Shape, shape_stack);
 
 baka_AABB aabb_from_obb(baka_OBB obb) {
 	v3 points[8];
@@ -1654,7 +1654,7 @@ enum PHYS_TYPE {
 };
 
 
-baka_AABB aabb_from_object(baka_static_object object) {
+baka_AABB aabb_from_object(baka_Shape object) {
 	
 	if (object.type_id == PHYS_OBB) {
 		return aabb_from_obb(object.obb);
@@ -1673,15 +1673,6 @@ baka_AABB aabb_from_object(baka_static_object object) {
 	}
 }
 
-
-typedef union physics_id {
-	struct {
-		uint type;
-		uint nr;
-	};
-	uint64_t id;
-} physics_id;
-
 typedef struct aabb_tree_node {
 	baka_AABB aabb;
 	int object_type;
@@ -1696,7 +1687,6 @@ typedef struct aabb_tree_node {
 
 // TODO: B trees 
 typedef struct baka_aabb_binary_tree {
-	baka_StaticObjects static_objects;
 	uint max_object;
 	uint next_object;
 	
@@ -1709,15 +1699,40 @@ typedef struct baka_aabb_binary_tree {
 	
 } baka_aabb_binary_tree;
 
+
+typedef struct baka_Body {
+	uint shape_index;
+	uint num_shapes;
+	// TODO: add a tree for large objects
+	//baka_aabb_binary_tree tree;
+} baka_Body;
+
+STACKMACRO(baka_Body, body_stack);
+
+typedef struct baka_Body_Collection {
+	baka_Body_Stack bodies;
+	baka_Shape_Stack shapes;
+} baka_Body_Collection;
+
+baka_Body_Collection baka_init_body_collection(uint num_shapes, uint num_bodies) {
+	baka_Body_Collection col;
+	col.shapes = baka_init_shape_stack(num_shapes);
+	col.bodies = baka_init_body_stack(num_bodies);
+	return col;
+}
+
 bool is_leaf(aabb_tree_node *node) {
 	return (node->left_child == -1 || node->right_child == -1);
 }
 
 
 void baka_aabb_find_contacts_tree(baka_aabb_binary_tree *tree, baka_AABB *aabb, uint64_t *collision_ids, int *collision_ids_ret_count, int collision_ids_max) {
-	
+	START_TIME;
 	int collision_ids_count = 0;
-	
+	if (tree->next_object == 0) {
+		*collision_ids_ret_count = 0;
+		return;
+	}
 	int ov_stack[tree->next_object];
 	int ov_current = 0;
 	ov_stack[0] = tree->root_node_index;
@@ -1749,6 +1764,7 @@ void baka_aabb_find_contacts_tree(baka_aabb_binary_tree *tree, baka_AABB *aabb, 
 	}
 	
 	*collision_ids_ret_count = collision_ids_count;
+	END_TIME;
 	return;
 }
 
@@ -1893,7 +1909,7 @@ void fix_upwards_tree(baka_aabb_binary_tree *tree, int tree_node_index) {
 }
 
 int tree_insert_aabb(baka_aabb_binary_tree *tree, baka_AABB aabb, uint64_t identifier) {
-	
+	START_TIME;
 	int node_index = tree_allocate_node(tree);
 	
 	//printf("inserting node %i\n", node_index);
@@ -1913,7 +1929,7 @@ int tree_insert_aabb(baka_aabb_binary_tree *tree, baka_AABB aabb, uint64_t ident
 	node->id = identifier;
 	
 	if (tree->root_node_index == -1) {
-		printf("inserting as root node\n");
+		//printf("inserting as root node\n");
 		tree->root_node_index = node_index;
 		return node_index;
 	}
@@ -1999,6 +2015,7 @@ int tree_insert_aabb(baka_aabb_binary_tree *tree, baka_AABB aabb, uint64_t ident
 	fix_upwards_tree(tree, tree_node_index);
 	
 	//printf("and this fix upwards tree never returns\n");
+	END_TIME;
 	return node_index;
 }
 
@@ -2102,14 +2119,14 @@ void tree_insert_triangle(baka_aabb_binary_tree *tree, baka_triangle tri, uint64
 
 
 
-void tree_insert_object(baka_aabb_binary_tree *tree, baka_static_object object, uint64_t identifier) {
+void tree_insert_object(baka_aabb_binary_tree *tree, baka_Shape object, uint64_t identifier) {
 	tree_insert_aabb(tree, aabb_from_object(object), identifier);
 	
 }
 
 
 void test_character_resolution(baka_capsule *cap, v3 *cap_positions, Quat * cap_rotations,v3 * cap_displacement, int num_cap) {
-	
+	START_TIME;
 	for (int i = 0; i < num_cap; i++) {
 		baka_capsule * cap_i = &cap[i]; 
 		v3 p1 = add_v3(rotate_vec3_quat(cap_i->p, cap_rotations[i]), cap_positions[i]);
@@ -2168,8 +2185,8 @@ void test_character_resolution(baka_capsule *cap, v3 *cap_positions, Quat * cap_
 			}
 		}
 	}
+	END_TIME;
 }
-
 
 /*
 baka_intersect_or_distance_segment_triangle(

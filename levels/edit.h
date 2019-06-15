@@ -1,38 +1,58 @@
 
-bool mouse_within_nk_rect(struct nk_rect rect, Key_Struct keys) {
+#define NK_UNUSED(x) ((void)(x))
+#define NK_SATURATE(x) (NK_MAX(0, NK_MIN(1.0f, x)))
+#define NK_LEN(a) (sizeof(a)/sizeof(a)[0])
+#define NK_ABS(a) (((a) < 0) ? -(a) : (a))
+#define NK_BETWEEN(x, a, b) ((a) <= (x) && (x) < (b))
+#define NK_INBOX(px, py, x, y, w, h)\
+(NK_BETWEEN(px,x,x+w) && NK_BETWEEN(py,y,y+h))
+#define NK_INTERSECT(x0, y0, w0, h0, x1, y1, w1, h1) \
+(!(((x1 > (x0 + w0)) || ((x1 + w1) < x0) || (y1 > (y0 + h0)) || (y1 + h1) < y0)))
+#define NK_CONTAINS(x, y, w, h, bx, by, bw, bh)\
+(NK_INBOX(x,y, bx, by, bw, bh) && NK_INBOX(x+w,y+h, bx, by, bw, bh))
+
+bool mouse_within_ui_rect(mu_Rect rect, Key_Struct keys) {
 	return NK_INBOX(keys.xpos, keys.ypos, rect.x, rect.y, rect.w, rect.h);
 }
 
-bool ui_edit_topbar(struct nk_context *ctx, EditorState *es, Key_Struct keys) {
-	bool ret = 0;
+bool new_ui_edit_topbar(struct mu_Context *ctx, EditorState *es, Key_Struct keys) {
 	
-	if (nk_begin(ctx, "editor topbar", nk_rect(5, 5, WINDOW_WIDTH-10, 35), NK_WINDOW_NO_SCROLLBAR ))
-	{
-		struct nk_rect panel_rect = nk_window_get_bounds(ctx);
-		ret =  mouse_within_nk_rect(panel_rect, keys);
+	static mu_Container window;
+	
+	/* init window manually so we can set its position and size */
+	if (!window.inited) {
+		mu_init_window(ctx, &window, 0);
+		window.rect = mu_rect(5, 5, WINDOW_WIDTH-10, 35);
+	}
+	
+	bool ret = mouse_within_ui_rect(window.rect, keys);
+	
+	if (mu_begin_window_ex(ctx, &window, "Panel", MU_OPT_NOCLOSE | MU_OPT_NOTITLE | MU_OPT_NORESIZE)) {
 		
-		nk_layout_row_dynamic(ctx, 20, 8);
+		mu_layout_row(ctx, -1, NULL, 0);
 		
-		if (nk_button_label(ctx, "SETTINGS")) {
+		if (mu_button(ctx, "SETTINGS")) {
 			es->editor_mode = SETTINGS;
 			es->edit_object_index = -1;
 		};
 		
-		if (nk_button_label(ctx, "SELECTION")) {
+		if (mu_button(ctx, "SELECTION")) {
 			es->editor_mode = SELECTION;
 			es->edit_object_index = -1;
 		};
 		
-		if (nk_button_label(ctx, "NEW_OBJECT")) {
+		if (mu_button(ctx, "NEW_OBJECT")) {
 			es->editor_mode = NEW_OBJECT;
 			es->edit_object_index = -1;
 		};
 		
+		
+		mu_end_window(ctx);
 	}
-	nk_end(ctx);
 	
 	return ret;
 } 
+
 
 void draw_ruler_plane(float ruler_distance, v3 plane_point, v3 plane_normal, Quat rot) {
 	
@@ -80,171 +100,281 @@ void draw_ruler_plane(float ruler_distance, v3 plane_point, v3 plane_normal, Qua
 	}
 	
 }
+#define MAX_NAME_LIST_CHARS 1024<<4
 
-bool ui_edit_settings(struct nk_context *ctx, EditorState *es, Key_Struct keys) {
+char level_name_list[MAX_NAME_LIST_CHARS];
+
+void get_level_name_list() {
+	int next_char = 0;
 	
-	bool ret = 0;
-	if (nk_begin(ctx, "ui_edit_settings", nk_rect(5, 45, 250, 300), 0))
-	{
-		struct nk_rect panel_rect = nk_window_get_bounds(ctx);
-		ret = mouse_within_nk_rect(panel_rect, keys);
-		
-		if (!ret) {
-			nk_edit_unfocus(ctx);
+	DIR *d;
+	struct dirent *dir;
+	
+	d = opendir(LEVEL_DIR);
+	if (d) {
+		while ((dir = readdir(d)) != NULL)
+		{
+			char namebuf[2048];
+			sprintf(namebuf, "%s/%s/gamestep.c", LEVEL_DIR, dir->d_name);
+			
+			FILE * file;
+			file = fopen(namebuf, "r");
+			if (file) {
+				if ( (next_char + strlen(dir->d_name)) >= MAX_NAME_LIST_CHARS ) {
+					return;
+				}
+				strcpy(&level_name_list[next_char], dir->d_name);
+				next_char += strlen(dir->d_name) + 1;
+				fclose(file);
+			}
 		}
+		closedir(d);
+	}
+}
+
+bool new_ui_edit_settings(mu_Context *ctx, EditorState *es, Key_Struct keys) {
+	
+	static mu_Container window;
+	
+	/* init window manually so we can set its position and size */
+	if (!window.inited) {
+		mu_init_window(ctx, &window, 0);
+		window.rect = mu_rect(5, 45, 250, 300);
+		get_level_name_list();
+	}
+	
+	bool ret = mouse_within_ui_rect(window.rect, keys);
+	if (mu_begin_window_ex(ctx, &window, "settings", MU_OPT_NOCLOSE | MU_OPT_NOTITLE | MU_OPT_NORESIZE)) {
+		mu_layout_row(ctx, 1, (int[]) { 237 }, 0);
 		
-		nk_layout_row_dynamic(ctx, 20, 1);
-		
-		if (nk_button_label(ctx, "save level")) {
+		if (mu_button(ctx, "save level")) {
 			es->level_needs_saving = true;
 		};
+		mu_checkbox(ctx, &es->show_dbg, "show dbg");
+		mu_checkbox(ctx, &es->show_bvh, "show bvh");
+		mu_checkbox(ctx, &es->show_all_physics_meshes, "show phys");
+		mu_checkbox(ctx, &es->show_perf_times, "show times");
 		
-		nk_label(ctx, "level file:", NK_TEXT_LEFT);
-		nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, &es->level_load_name[0], 128, nk_filter_ascii);
+		mu_label(ctx, "load level:");
 		
-		if (nk_button_label(ctx, "load level")) {
-			es->level_needs_loading = true;
-		};
+		int next_char = 0;
+		while(true) {
+			char namebuf[2048];
+			strcpy(namebuf, &level_name_list[next_char]);
+			int len = strlen(namebuf);
+			if (len == 0) {
+				break;
+			}
+			next_char += len+1;
+			if (mu_button(ctx, namebuf)) {
+				strcpy(es->level_load_name, namebuf);
+				es->level_needs_loading = true;
+			}
+		}
 		
-		es->show_dbg = nk_check_label(ctx, "show dbg", es->show_dbg);
-		es->show_bvh = nk_check_label(ctx, "show bhv", es->show_bvh);
-		es->show_all_physics_meshes = nk_check_label(ctx, "show all phys", es->show_all_physics_meshes);
+		mu_end_window(ctx);
 	}
-	nk_end(ctx);
-	
 	return ret;
 }
 
-bool ui_edit_static_level_entity(struct nk_context *ctx, LevelStatic *level_static, NodeStack *ns_instances, PrototypeStack *prototypes, baka_StaticObjects *prototype_static_objects, StringStack *ss, int static_level_entity_index, Key_Struct keys) {
+float within_360(float x) {
+	if (x > 180) {
+		return (x - 360.0f);
+	}
+	if (x <= 180) {
+		return (x + 360.0f);
+	}
+	return x;
+}
+
+bool edit_point_string_needs_update;
+
+bool new_ui_edit_point(Game_Struct *game, int point_index) {
+	Game_Point *gp = &game->game_points.points[point_index];
+	mu_Context *ctx = game->mu_ctx;
+	Key_Struct keys = game->keys;
+	EditorState *es = &game->es;
 	
 	bool ret = 0;
 	
-	StaticLevelEntity *static_level_entity = &level_static->level_entities[static_level_entity_index];
+	static mu_Container window;
 	
-	StaticEntityPrototype prot = prototypes->static_prototypes[static_level_entity->prototype_index];
+	/* init window manually so we can set its position and size */
+	if (!window.inited) {
+		mu_init_window(ctx, &window, 0);
+		window.rect = mu_rect(5, 45, 250, 500);
+	}
 	
-	if (nk_begin(ctx, "ui_edit_static_level_entity", nk_rect(5, 45, 250, 300), 0))
-	{
-		struct nk_rect panel_rect = nk_window_get_bounds(ctx);
-		ret =  mouse_within_nk_rect(panel_rect, keys);
+	if (edit_point_string_needs_update) {
+		strcpy(es->edit_point_string, gp->name);
+		edit_point_string_needs_update = false;
+	}
+	
+	ret = mouse_within_ui_rect(window.rect, keys);
+	if (mu_begin_window_ex(ctx, &window, "Edit Point", MU_OPT_NOCLOSE | MU_OPT_NOTITLE | MU_OPT_NORESIZE)) {
 		
-		nk_layout_row_dynamic(ctx, 20, 1);
-		const char* node_name = (const char*)prot.name;
+		mu_layout_row(ctx, 1, (int[]) { 237 }, 0);
 		
-		const char* prot_index_string  = &ss->chars[ss->next_string];ss->next_string += 1+sprintf(&ss->chars[ss->next_string], "prot_index: %i", static_level_entity->prototype_index);
+		mu_label(ctx, (const char*)gp->name);
 		
-		nk_label(ctx, node_name, NK_TEXT_LEFT);
-		nk_label(ctx, prot_index_string, NK_TEXT_LEFT);
+		if (mu_textbox(ctx, es->edit_point_string, MAX_NAME_LENGTH) & MU_RES_SUBMIT) {
+			mu_set_focus(ctx, ctx->last_id);
+			update_game_point_name(&game->game_points, point_index, es->edit_point_string);
+		}
 		
-		float new_X = nk_propertyf(ctx, "X: ", -10000.0, static_level_entity->transform.translation.X, 10000.0, 0.5f, 0.5f);
-		float new_Y = nk_propertyf(ctx, "Y: ", -10000.0, static_level_entity->transform.translation.Y, 10000.0, 0.5f, 0.5f);
-		float new_Z = nk_propertyf(ctx, "Z: ", -10000.0, static_level_entity->transform.translation.Z, 10000.0, 0.5f, 0.5f);
+		mu_label(ctx, "pos:");
+		// translation
+		mu_number(ctx, &(gp->point.X), 0.5f);
+		mu_number(ctx, &(gp->point.Y), 0.5f);
+		mu_number(ctx, &(gp->point.Z), 0.5f);
 		
+		mu_end_window(ctx);
+	}
+	return ret;
+}
+
+bool new_ui_edit_static_level_entity(Game_Struct *game, int entity_index) {
+	
+	mu_Context *ctx = game->mu_ctx;
+	LevelStatic *level_static = &game->level_static;
+	EditorState *es = &game->es;
+	Key_Struct keys = game->keys;
+	GameAssets *ga = &game->assets;
+	CameraState *cs = &game->cs;
+	NodeStack *ns_instances = &game->ns_instances;
+	//StringStack *ss = &game->string_stack; 
+	PrototypeStack *prototypes = &ga->prototypes;
+	baka_Shape_Stack *prototype_static_objects = &ga->prototype_static_objects;
+	
+	bool ret = 0;
+	
+	static mu_Container window;
+	
+	// init window manually so we can set its position and size
+	if (!window.inited) {
+		mu_init_window(ctx, &window, 0);
+		window.rect = mu_rect(5, 45, 250, 500);
+	}
+	
+	Base_Entity *entity = &level_static->entities.els[entity_index];
+	
+	Entity_Prototype prot = prototypes->prototypes[entity->prototype_index];
+	
+	ret = mouse_within_ui_rect(window.rect, keys);
+	if (mu_begin_window_ex(ctx, &window, "Edit Entity", MU_OPT_NOCLOSE | MU_OPT_NOTITLE | MU_OPT_NORESIZE)) {
+		char buf[1024];
+		
+		mu_layout_row(ctx, 1, (int[]) { 237 }, 0);
+		
+		mu_label(ctx, (const char*)prot.name);
+		sprintf(buf, "prot_index: %i", entity->prototype_index);
+		mu_label(ctx, buf);
+		
+		mu_label(ctx, "pos:");
+		// translation
+		mu_number(ctx, &(entity->transform.translation.X), 0.5f);
+		mu_number(ctx, &(entity->transform.translation.Y), 0.5f);
+		mu_number(ctx, &(entity->transform.translation.Z), 0.5f);
+		
+		mu_label(ctx, "rot:");
+		
+		// TODO: rotation doesn't work correctly, figure out why the hell
+		// TODO2: its because of gimbal lock, fuck that shit, maybe just edit quats directly?
+		// rotation
 		float x_rot, y_rot, z_rot;
+		quaternion_to_euler_angle(entity->transform.rotation, &x_rot, &y_rot, &z_rot);
 		
-		quaternion_to_euler_angle(static_level_entity->transform.rotation, &x_rot, &y_rot, &z_rot);
+		x_rot = x_rot * (180.0f/(HMM_PI));
+		y_rot = y_rot * (180.0f/(HMM_PI));
+		z_rot = z_rot * (180.0f/(HMM_PI));
 		
-		x_rot = x_rot * (180.0f/HMM_PI);
-		y_rot = y_rot * (180.0f/HMM_PI);
-		z_rot = z_rot * (180.0f/HMM_PI);
+		mu_number(ctx, &(x_rot), 1.0f);
+		mu_number(ctx, &(y_rot), 1.0f);
+		mu_number(ctx, &(z_rot), 1.0f);
 		
-		float new_rot_x_angle = nk_propertyf(ctx, "X a: ", -180.0, x_rot, 180.0, 1.0f, 1.0f);
-		float new_rot_y_angle = nk_propertyf(ctx, "Y a: ", -180.0, y_rot, 180.0, 1.0f, 1.0f);
-		float new_rot_z_angle = nk_propertyf(ctx, "Z a: ", -180.0, z_rot, 180.0, 1.0f, 1.0f);
+		x_rot = within_360(x_rot);
+		y_rot = within_360(y_rot);
+		z_rot = within_360(z_rot);
 		
-		float x_rot_new = new_rot_x_angle * (HMM_PI/180.0f);
-		float y_rot_new = new_rot_y_angle * (HMM_PI/180.0f);
-		float z_rot_new = new_rot_z_angle * (HMM_PI/180.0f);
+		float x_rot_new = x_rot * ((HMM_PI)/180.0f);
+		float y_rot_new = y_rot * ((HMM_PI)/180.0f);
+		float z_rot_new = z_rot * ((HMM_PI)/180.0f);
 		
 		Quat new_rot = euler_to_quaternion(x_rot_new, y_rot_new, z_rot_new);
 		
-		// -- scale
-		float new_x_scale = nk_propertyf(ctx, "X s: ", 0.1, static_level_entity->scale.X, 100.0, 0.5f, 0.5f);
+		entity->transform.rotation = new_rot;
 		
-		static_level_entity->scale.X = new_x_scale;
-		level_static->scales[static_level_entity_index].X = new_x_scale;
+		// scale
+		mu_number(ctx, &entity->scale.X, 0.5f);
 		
-		if (!static_level_entity->scale_single) {
-			float new_y_scale = nk_propertyf(ctx, "Y s: ", 0.1, static_level_entity->scale.Y, 100.0, 0.5f, 0.5f);
-			
-			float new_z_scale = nk_propertyf(ctx, "Z s: ", 0.1, static_level_entity->scale.Z, 100.0, 0.5f, 0.5f);
-			static_level_entity->scale.Y = new_y_scale;
-			static_level_entity->scale.Z = new_z_scale;
-			
-			level_static->scales[static_level_entity_index].Y = new_y_scale;
-			level_static->scales[static_level_entity_index].Z = new_z_scale;
+		if (!entity->scale_single) {
+			mu_number(ctx, &entity->scale.Y, 0.5f);
+			mu_number(ctx, &entity->scale.Z, 0.5f);
 		} else {
-			static_level_entity->scale.Y = new_x_scale;
-			static_level_entity->scale.Z = new_x_scale;
-			
-			level_static->scales[static_level_entity_index].Y = new_x_scale;
-			level_static->scales[static_level_entity_index].Z = new_x_scale;
+			entity->scale.Y = entity->scale.X;
+			entity->scale.Z = entity->scale.X;
 		}
 		
+		update_base_entity(ga, &level_static->entities, entity_index);
 		
-		static_level_entity->transform.rotation = new_rot;
-		level_static->transforms[static_level_entity_index].rotation = new_rot;
-		
-		static_level_entity->transform.translation.X = new_X;
-		level_static->transforms[static_level_entity_index].translation.X = new_X;
-		
-		static_level_entity->transform.translation.Y = new_Y;
-		level_static->transforms[static_level_entity_index].translation.Y = new_Y;
-		
-		static_level_entity->transform.translation.Z = new_Z;
-		level_static->transforms[static_level_entity_index].translation.Z = new_Z;
-		
-		baka_AABB merged_aabb = calculate_static_level_entity_aabb(level_static, prototypes, prototype_static_objects, static_level_entity_index);
-		
-		//printf("updating static_level_entity->aabb_node_index %i\n", static_level_entity->aabb_node_index);
-		
-		static_level_entity->aabb_node_index = tree_update_aabb_node(&level_static->entity_tree, static_level_entity->aabb_node_index, merged_aabb);
-		
-		calculate_object_transforms(
-			*ns_instances,
-			&static_level_entity->model,
-			&level_static->transforms[static_level_entity_index],
-			1);
-		
-		//float nk_propertyf(struct nk_context *ctx, const char *name, float min, float val, float max, float step, float inc_per_pixel);
-		//float nk_propertyf(struct nk_context *ctx, const char *name, float min, float val, float max, float step, float inc_per_pixel);
+		mu_end_window(ctx);
 	}
-	nk_end(ctx);
+	
 	return ret;
 }
 
-
-bool ui_create_static_level_entity(struct nk_context *ctx, LevelStatic *level_static, NodeStack *ns_instances, PrototypeStack *prototypes, baka_StaticObjects *prototype_static_objects, StringStack *ss, int static_level_entity_index, EditorState *es,  Key_Struct keys) {
+bool new_ui_create_static_level_entity(Game_Struct *game, int static_level_entity_index) {
+	
+	mu_Context *ctx = game->mu_ctx;
+	LevelStatic *level_static = &game->level_static;
+	EditorState *es = &game->es;
+	Key_Struct keys = game->keys;
+	GameAssets *ga = &game->assets;
+	CameraState *cs = &game->cs;
+	NodeStack *ns_instances = &game->ns_instances;
+	PrototypeStack *prototypes = &ga->prototypes;
+	baka_Shape_Stack *prototype_static_objects = &ga->prototype_static_objects;
+	
 	bool ret = 0;
 	
-	if (nk_begin(ctx, "ui_create_static_level_entity", nk_rect(5, 45, 250, 300), 0))
-	{
-		struct nk_rect panel_rect = nk_window_get_bounds(ctx);
-		ret =  mouse_within_nk_rect(panel_rect, keys);
+	static mu_Container window;
+	
+	if (!window.inited) {
+		mu_init_window(ctx, &window, 0);
+		window.rect = mu_rect(5, 45, 250, 300);
+	}
+	if (mu_begin_window_ex(ctx, &window, "Create", MU_OPT_NOCLOSE | MU_OPT_NOTITLE | MU_OPT_NORESIZE)) {
 		
-		nk_layout_row_dynamic(ctx, 20, 1);
+		mu_layout_row(ctx, 1, (int[]) { 237 }, 0);
 		
 		if (es->new_object_prototype_index != -1) {
-			StaticEntityPrototype *prot = &prototypes->static_prototypes[es->new_object_prototype_index];
+			Entity_Prototype *prot = &prototypes->prototypes[es->new_object_prototype_index];
 			const char* node_name = (const char*)prot->name;
-			nk_label(ctx, node_name, NK_TEXT_LEFT);
+			mu_label(ctx,node_name);
+		}
+		
+		if (mu_button(ctx, "add point")) {
+			es->new_object_prototype_index = -1;
+			es->create_new_point = true;
 		}
 		
 		for (int i = 0; i < prototypes->next_prototype; i++) {
-			StaticEntityPrototype *prot = &prototypes->static_prototypes[i];
+			Entity_Prototype *prot = &prototypes->prototypes[i];
 			const char* node_name = (const char*)prot->name;
-			if (nk_button_label(ctx, node_name)) {
+			if (mu_button(ctx, node_name)) {
 				es->new_object_prototype_index = i;
-			};
-			
+				es->create_new_point = false;
+			}
 		}
+		
+		ret = mouse_within_ui_rect(window.rect, keys);
+		
+		mu_end_window(ctx);
 	}
-	nk_end(ctx);
 	return ret;
 }
 
-
-void editor_step(Game_Struct * game, float dt){//LevelStatic *level_static, Terrain terra, GameAssets *ga, EditorState *es, CameraState *cs, float dt, Key_Struct keys) {
+void editor_step(Game_Struct * game, float dt){
 	
 	EditorState *es = &game->es;
 	Key_Struct keys = game->keys;
@@ -256,8 +386,12 @@ void editor_step(Game_Struct * game, float dt){//LevelStatic *level_static, Terr
 	
 	bool dont_move_cam = false;
 	
+	if (game->mu_ctx->focus != 0) {
+		dont_move_cam = true;
+	}
+	
 	if (es->editor_mode == SETTINGS) {
-		if (ui_edit_settings(game->ctx, es, keys)) {
+		if (new_ui_edit_settings(game->mu_ctx, es, keys)) {
 			dont_move_cam = true;
 		}
 	}
@@ -269,7 +403,7 @@ void editor_step(Game_Struct * game, float dt){//LevelStatic *level_static, Terr
 		strcat(save_path, "/");
 		strcat(save_path, game->static_level_file_name);
 		
-		save_level_static(level_static, save_path, &ga->prototypes);
+		save_level_static(level_static, save_path, &ga->prototypes, &game->game_points);
 		
 		es->level_needs_saving = false;
 	}
@@ -328,8 +462,8 @@ void editor_step(Game_Struct * game, float dt){//LevelStatic *level_static, Terr
 	
 	v4 raypoint_clipspace = vec4(clip_space_xpos, clip_space_ypos, 1.0, 1.0);
 	
-    v4 raypoint_cameraspace4 = HMM_MultiplyMat4ByVec4(cs->inv_projection, raypoint_clipspace);
-    v3 raypoint_cameraspace = vec3(raypoint_cameraspace4.X, raypoint_cameraspace4.Y, raypoint_cameraspace4.Z);
+	v4 raypoint_cameraspace4 = HMM_MultiplyMat4ByVec4(cs->inv_projection, raypoint_clipspace);
+	v3 raypoint_cameraspace = vec3(raypoint_cameraspace4.X, raypoint_cameraspace4.Y, raypoint_cameraspace4.Z);
 	v3 raypoint = add_v3(rotate_vec3_quat(raypoint_cameraspace, camera_rot_quat), es->editor_point);
 	
 	v3 ray_direction = sub_v3(raypoint, es->editor_point);
@@ -343,100 +477,137 @@ void editor_step(Game_Struct * game, float dt){//LevelStatic *level_static, Terr
 	float tmin_ret;
 	v3 tempnormal;
 	
-	bool didhit = raycast_return_normal(*level_static, ga->prototypes, ga->prototype_static_objects,
-										&level_static->entity_tree, es->editor_point, ray_direction, &tmin_ret, &tempnormal, &hit_id);
-	/*
- float tri_tmin_ret;
- v3 tri_normal;
- uint64_t tri_col_ids[50];
- int col_id_ret_count;
- 
- bool didhit_tri = baka_raycast_tree_return_normal(&level_static->tri_tree, es->editor_point, ray_direction, &tri_tmin_ret, &tri_normal, tri_col_ids, &col_id_ret_count, 50);
- 
- if (didhit_tri) {
-  for (int i = 0; i < col_id_ret_count; i++) {
-   baka_triangle draw_tri = level_static->model_tris[tri_col_ids[i]];
-   mush_draw_triangle(&dbg_list, draw_tri.a, draw_tri.b, draw_tri.c, Green4);
-  }
- }
- */
-	baka_OBB test_obb = baka_make_OBB(vec3(0.0f, 10.0f, 0.0f), vec3(3.0f, 3.0f, 3.0f), quaternion(0.0f, 0.0f, 0.0f, 1.0f));
+	bool didhit = raycast_entity_collection_return_normal(ga, &level_static->entities, es->editor_point, ray_direction, &tmin_ret, &tempnormal, &hit_id);
 	
-	mush_draw_cube(dbg_list, test_obb.mid, test_obb.ex, test_obb.rot, Blue4);
+	bool hit_a_point = false;
+	uint point_idx = 0;
 	
-	create_clipped_decal_mesh(level_static, test_obb);
+	for (int i = 0; i < game->game_points.next_point; i++) {
+		v3 point = game->game_points.points[i].point;
+		
+		mush_draw_sphere(
+			dbg_list,
+			point,
+			1.0f,
+			vec4(1.0f,1.0,0.0f,0.3f));
+		
+		baka_sphere p_sphere;
+		p_sphere.center = point;
+		p_sphere.radius = 1.0f;
+		
+		float p_t;
+		v3 p_nrm;
+		
+		bool didhit_p = baka_raycast_sphere_get_normal(es->editor_point, ray_direction, p_sphere, &p_t, &p_nrm);
+		if (didhit_p && (p_t < tmin_ret)) {
+			tmin_ret = p_t;
+			hit_a_point = true;
+			point_idx = i;
+			edit_point_string_needs_update = true;
+		}
+	}
 	
 	bool mouse_over_ui = 0;
 	
-	mouse_over_ui = ui_edit_topbar(game->ctx, es, keys);
+	mouse_over_ui = new_ui_edit_topbar(game->mu_ctx, es, keys);
 	
 	if (es->editor_mode == SELECTION) {
 		
 		if (es->edit_object_index != -1) {
-			StaticLevelEntity edit_entity = level_static->level_entities[es->edit_object_index];
+			Base_Entity edit_entity = level_static->entities.els[es->edit_object_index];
 			
-			//mush_draw_sphere(&dbg_list, edit_entity.transform.translation, 0.4f, Yellow4);
+			mouse_over_ui = new_ui_edit_static_level_entity(game, es->edit_object_index);
 			
-			mouse_over_ui = ui_edit_static_level_entity(game->ctx, level_static, ns_instances, &ga->prototypes, &ga->prototype_static_objects, &game->string_stack, es->edit_object_index, keys);
-			
-			if (keys.m_key.down) {
-				draw_ruler_plane(5.0f, vec3(es->editor_point.X, edit_entity.transform.translation.Y, es->editor_point.Z), vec3(0.0f, 1.0f, 0.0f), movement_quaternion);
-				
-				float plane_t;
-				
-				bool did_hit_plane = baka_raycast_plane(es->editor_point, ray_direction, edit_entity.transform.translation.Y, vec3(0.0f, 1.0f, 0.0f), &plane_t);
-				
-				if (did_hit_plane) {
-					v3 point_of_impact = add_v3(es->editor_point,mul_v3f(ray_direction, plane_t));
+			if (!dont_move_cam) {
+				if (keys.m_key.down) {
+					draw_ruler_plane(5.0f, vec3(es->editor_point.X, edit_entity.transform.translation.Y, es->editor_point.Z), vec3(0.0f, 1.0f, 0.0f), movement_quaternion);
 					
-					level_static->level_entities[es->edit_object_index].transform.translation = point_of_impact;
+					float plane_t;
+					
+					bool did_hit_plane = baka_raycast_plane(es->editor_point, ray_direction, edit_entity.transform.translation.Y, vec3(0.0f, 1.0f, 0.0f), &plane_t);
+					
+					if (did_hit_plane) {
+						v3 point_of_impact = add_v3(es->editor_point,mul_v3f(ray_direction, plane_t));
+						
+						level_static->entities.els[es->edit_object_index].transform.translation = point_of_impact;
+					}
+					
+				}
+				else if (keys.n_key.down) {
+					mush_draw_segment(dbg_list, edit_entity.transform.translation, add_v3(edit_entity.transform.translation, editor_forward_XZ), Red4, Red4);
+					
+					draw_ruler_plane(5.0f, edit_entity.transform.translation, editor_forward_XZ, quaternion(0.0,0.0,0.0,1.0));
+					
+					float plane_t;
+					bool did_hit_plane = baka_raycast_plane( sub_v3(es->editor_point, edit_entity.transform.translation), ray_direction, 0.0f, editor_forward_XZ, &plane_t);
+					
+					if (did_hit_plane) {
+						v3 point_of_impact = add_v3(es->editor_point,mul_v3f(ray_direction, plane_t));
+						
+						level_static->entities.els[es->edit_object_index].transform.translation = point_of_impact;
+					}
+				}
+			}
+		}
+		
+		if (es->edit_point_index != -1) {
+			Game_Point *edit_point = &game->game_points.points[es->edit_point_index];
+			
+			mouse_over_ui = new_ui_edit_point(game, es->edit_point_index);
+			if (!dont_move_cam) {
+				if (keys.m_key.down) {
+					draw_ruler_plane(5.0f, vec3(es->editor_point.X, edit_point->point.Y, es->editor_point.Z), vec3(0.0f, 1.0f, 0.0f), movement_quaternion);
+					float plane_t;
+					
+					bool did_hit_plane = baka_raycast_plane(es->editor_point, ray_direction, edit_point->point.Y, vec3(0.0f, 1.0f, 0.0f), &plane_t);
+					
+					if (did_hit_plane) {
+						v3 point_of_impact = add_v3(es->editor_point,mul_v3f(ray_direction, plane_t));
+						
+						edit_point->point = point_of_impact;
+					}
+					
 				}
 				
-			}
-			
-			else if (keys.n_key.down) {
-				
-				
-				mush_draw_segment(dbg_list, edit_entity.transform.translation, add_v3(edit_entity.transform.translation, editor_forward_XZ), Red4, Red4);
-				
-				draw_ruler_plane(5.0f, edit_entity.transform.translation, editor_forward_XZ, quaternion(0.0,0.0,0.0,1.0));
-				
-				
-				float plane_t;
-				
-				
-				
-				bool did_hit_plane = baka_raycast_plane( sub_v3(es->editor_point, edit_entity.transform.translation), ray_direction, 0.0f, editor_forward_XZ, &plane_t);
-				
-				if (did_hit_plane) {
-					v3 point_of_impact = add_v3(es->editor_point,mul_v3f(ray_direction, plane_t));
+				else if (keys.n_key.down) {
+					mush_draw_segment(dbg_list, edit_point->point, add_v3(edit_point->point, editor_forward_XZ), Red4, Red4);
+					draw_ruler_plane(5.0f, edit_point->point, editor_forward_XZ, quaternion(0.0,0.0,0.0,1.0));
 					
-					level_static->level_entities[es->edit_object_index].transform.translation = point_of_impact;
+					float plane_t;
+					bool did_hit_plane = baka_raycast_plane( sub_v3(es->editor_point, edit_point->point), ray_direction, 0.0f, editor_forward_XZ, &plane_t);
+					
+					if (did_hit_plane) {
+						v3 point_of_impact = add_v3(es->editor_point,mul_v3f(ray_direction, plane_t));
+						
+						edit_point->point = point_of_impact;
+					}
 				}
 			}
 		}
 		
 		if (didhit && !mouse_over_ui) {
-			StaticLevelEntity show_entity = level_static->level_entities[hit_id];
-			debug_draw_static_level_entity(dbg_list, show_entity, &ga->prototypes, &ga->prototype_static_objects);
+			Base_Entity show_entity = level_static->entities.els[hit_id];
+			debug_draw_base_entity(dbg_list, ga, show_entity, vec4(0.0f, 1.0f, 1.0f, 1.0f));
 		}
 		
 		
-		if (didhit && keys.left_mouse_button.initial && !mouse_over_ui && !keys.m_key.down) {
+		if (didhit && !hit_a_point && keys.left_mouse_button.initial && !mouse_over_ui && !keys.m_key.down) {
 			es->edit_object_index = hit_id;
-			
+			es->edit_point_index = -1;
 		}
 		
+		if (hit_a_point && keys.left_mouse_button.initial && !mouse_over_ui && !keys.m_key.down) {
+			es->edit_object_index = -1;
+			es->edit_point_index = point_idx;
+		}
 	}
 	
 	if (es->editor_mode == NEW_OBJECT) {
-		
-		mouse_over_ui = ui_create_static_level_entity(game->ctx, level_static, ns_instances, &ga->prototypes, &ga->prototype_static_objects, &game->string_stack, es->edit_object_index, es, keys);
+		mouse_over_ui = new_ui_create_static_level_entity(game, es->edit_object_index);
 		
 		draw_ruler_plane(5.0f, vec3(es->editor_point.x, es->plane_height, es->editor_point.z), vec3(0.0, 1.0, 0.0), movement_quaternion);
 		
-		
-		if (!mouse_over_ui) {
+		if (!mouse_over_ui && !dont_move_cam) {
 			float plane_t;
 			
 			bool did_hit_plane = baka_raycast_plane(es->editor_point, ray_direction, es->plane_height, vec3(0.0f, 1.0f, 0.0f), &plane_t);
@@ -446,11 +617,33 @@ void editor_step(Game_Struct * game, float dt){//LevelStatic *level_static, Terr
 				
 				mush_draw_sphere(dbg_list, point_of_impact, 0.2f, Green4);
 				
+				if (keys.left_mouse_button.initial && es->create_new_point== true) {
+					Game_Points *game_points = &game->game_points;
+					if (game_points->next_point >= game_points->max_point) {
+						printf("can't add any more game points\n");
+					} else {
+						Game_Point gp;
+						gp.point = point_of_impact;
+						char temp_name[MAX_NAME_LENGTH];
+						sprintf(temp_name, "point%i", game_points->next_point);
+						
+						gp.name = push_string(&game_points->point_names, temp_name);
+						uint key = crc32_cstring(temp_name);
+						game_points->points[game_points->next_point] = gp;
+						
+						map_insert_kv(&game_points->map, key, game_points->next_point);
+						es->edit_point_index = game_points->next_point;
+						es->edit_object_index = -1;
+						game_points->next_point++;
+						es->editor_mode = SELECTION;
+					}
+				}
+				
 				if (keys.left_mouse_button.initial && es->new_object_prototype_index != -1) {
 					
 					bool ok = 0;
 					
-					StaticEntityPrototype prot = ga->prototypes.static_prototypes[es->new_object_prototype_index];
+					Entity_Prototype prot = ga->prototypes.prototypes[es->new_object_prototype_index];
 					
 					GenModel instanced_model = instantiate_static_entity_prototype(ns_instances, &ga->prototypes, es->new_object_prototype_index, &ok);
 					
@@ -461,10 +654,10 @@ void editor_step(Game_Struct * game, float dt){//LevelStatic *level_static, Terr
 						return;
 					}
 					
-					es->edit_object_index = level_static->next_level_entity;
+					es->edit_object_index = level_static->entities.num;
 					es->editor_mode = SELECTION;
 					
-					StaticLevelEntity sel;
+					Base_Entity sel;
 					sel.prototype_index = es->new_object_prototype_index;
 					sel.model = instanced_model;
 					sel.transform.translation = point_of_impact;
@@ -472,9 +665,12 @@ void editor_step(Game_Struct * game, float dt){//LevelStatic *level_static, Terr
 					sel.scale = vec3(1.0f, 1.0f, 1.0f);
 					sel.scale_single = prot.scale_single;
 					
-					add_static_level_entity_to_level(level_static, ns_instances, sel);
+					push_entity(ga, &level_static->entities, sel, level_static->entities.num);
+					//add_static_level_entity_to_level(level_static, ns_instances, sel);
 					
-					rebuild_level_static_tree(level_static, &ga->prototypes, &ga->prototype_static_objects);
+					calculate_entity_collection_transforms(*ns_instances, &level_static->entities);
+					
+					//rebuild_level_static_tree(level_static, &ga->prototypes, &ga->prototype_static_objects);
 				}
 			}
 		}
@@ -482,25 +678,28 @@ void editor_step(Game_Struct * game, float dt){//LevelStatic *level_static, Terr
 	
 	
 	if (es->show_bvh) {
-		for (int i = 0; i < level_static->entity_tree.next_object; i++) {
-			baka_AABB aabb = level_static->entity_tree.nodes[i].aabb;
+		for (int i = 0; i < level_static->entities.tree.next_object; i++) {
+			baka_AABB aabb = level_static->entities.tree.nodes[i].aabb;
 			mush_draw_cube(dbg_list, aabb.mid, aabb.ex, quaternion(0.0, 0.0, 0.0, 1.0), vec4(1.0, 1.0, 1.0, 1.0));
 		}
-		baka_AABB root_node_aabb = level_static->entity_tree.nodes[level_static->entity_tree.root_node_index].aabb;
+		baka_AABB root_node_aabb = level_static->entities.tree.nodes[level_static->entities.tree.root_node_index].aabb;
 		mush_draw_cube(dbg_list, root_node_aabb.mid, root_node_aabb.ex, quaternion(0.0, 0.0, 0.0, 1.0), vec4(0.0, 1.0, 1.0, 1.0));
 		
 	}
-	
+	if (es->edit_object_index != -1) {
+		Base_Entity edit_entity = level_static->entities.els[es->edit_object_index];
+		debug_draw_base_entity(dbg_list, ga, edit_entity, vec4(1.0f, 0.7f, 0.0f, 0.3f));
+	}
 	if (es->show_all_physics_meshes) {
-		for (int i = 0; i < level_static->next_level_entity; i++) {
-			StaticLevelEntity statent = level_static->level_entities[i];
-			
-			debug_draw_static_level_entity(dbg_list, statent, &ga->prototypes, &ga->prototype_static_objects);
+		for (int i = 0; i < level_static->entities.num; i++) {
+			Base_Entity statent = level_static->entities.els[i];
+			debug_draw_base_entity(dbg_list, ga, statent, vec4(1.0f, 1.0f, 1.0f, 0.3f));
 		}
 	}
-	if (es->edit_object_index != -1) {
-		StaticLevelEntity edit_entity = level_static->level_entities[es->edit_object_index];
-		debug_draw_static_level_entity(dbg_list, edit_entity, &ga->prototypes, &ga->prototype_static_objects);
+	
+	if (!dont_move_cam && game->keys.p_key.initial == 1) {
+		//game->low_fps_mode= !game->low_fps_mode;
+		game->should_reload_lib = 1;
 	}
 	
 }

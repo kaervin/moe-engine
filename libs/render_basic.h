@@ -1,11 +1,12 @@
 #include "HandmadeMath.h"
 #include <float.h>
 #include "typos.h"
-#include "hashtable.h"
+//#include "hashtable.h"
 #include "stb_image.h"
 
-#ifndef RENDER_H
-#define RENDER_H
+#define FUN
+
+#ifdef RENDER_TYPES
 
 #define NUM_BONES_PER_VERTEX 4
 
@@ -182,18 +183,6 @@ typedef struct ModelMemory {
 	NodeStack node_stack;
 	SkinStack skin_stack;
 } ModelMemory;
-
-ModelMemory init_model_memory();
-
-GenModelPack load_modelpack(
-const char * filename);
-
-bool instantiate_genmodel(
-NodeStack ns_src,
-GenModel gm_src,
-NodeStack * ns_dest,
-GenModel * gm_dest);
-
 // --- animation descriptions
 
 
@@ -293,32 +282,6 @@ typedef struct CombinedAnimationState {
 	v4 weight;
 } CombinedAnimationState;
 
-AnimReturn load_animation_test(
-const char * filename);
-
-void animate_nodes(
-NodeStack * ns,
-AnimStack * as,
-GenModel gm,
-AnimDescr ad,
-uint ai,
-float time );
-
-void animte_model(
-NodeStack * ns,
-AnimStack * as,
-GenModel gm,
-AnimationState animstate);
-
-
-void animate_model(
-NodeStack * ns_src,
-GenModel gm_src,
-NodeStack * ns_result,
-GenModel gm_result,
-AnimStack * as,
-CombinedAnimationState c_animstate);
-
 // --- model rendering definitions
 
 // the basic batched opengl draw command struct
@@ -403,6 +366,43 @@ typedef struct Rendering_Context_Gen {
 	RenderInfo_Skin info_skin;
 } Rendering_Context_Gen;
 
+#endif
+
+#ifndef RENDER_H
+#define RENDER_H
+
+ModelMemory init_model_memory();
+
+GenModelPack load_modelpack(
+const char * filename);
+
+
+AnimReturn load_animation_test(
+const char * filename);
+
+void animate_nodes(
+NodeStack * ns,
+AnimStack * as,
+GenModel gm,
+AnimDescr ad,
+uint ai,
+float time );
+
+void animte_model(
+NodeStack * ns,
+AnimStack * as,
+GenModel gm,
+AnimationState animstate);
+
+
+void animate_model(
+NodeStack * ns_src,
+GenModel gm_src,
+NodeStack * ns_result,
+GenModel gm_result,
+AnimStack * as,
+CombinedAnimationState c_animstate);
+
 RenderInfo_Skin prepare_skin(
 GenMeshStack gms,
 uint ssbo_data_len);
@@ -442,19 +442,42 @@ Transform * world_transforms,
 v3 * model_scales,
 uint num_models);
 
-void calculate_object_transforms(NodeStack ns, GenModel * gma, Transform * world_transforms,uint num_models);
-
 GenModel load_model_into(ModelMemory *mm, const char *filename);
 
-void set_node_texture_asset_by_name(NodeStack *ns, GenModel *genmodel, const char* node_name, texture_asset tex);
 
-struct texture_asset to_texture_asset(unsigned int value);
 Texture_Asset_Manager gather_texture_assets();
+
 
 #endif /* RENDER_H */
 
 
 #ifdef RENDER_IMPLEMENTATION
+
+FUN bool instantiate_genmodel(
+NodeStack ns_src,
+GenModel gm_src,
+NodeStack * ns_dest,
+GenModel * gm_dest);
+
+
+FUN void set_node_texture_asset_by_name(NodeStack *ns, GenModel *genmodel, const char* node_name, texture_asset tex);
+
+FUN struct texture_asset to_texture_asset(unsigned int value);
+
+FUN static void animate_model_test(
+NodeStack * ns_src,
+GenModel gm_src,
+NodeStack * ns_result,
+GenModel gm_result,
+AnimStack * as,
+CombinedAnimationState c_animstate);
+
+FUN void solve_IK_fabrik(NodeStack *ns, GenModel *model, uint target_node, uint chain_length, v3 target_pos_delta, uint pole_target, float mix);
+
+FUN GenModel get_model_from_crc32(ModelMemory *mm, bool *ok, uint key);
+
+
+FUN void calculate_object_transforms(NodeStack ns, GenModel * gma, Transform * world_transforms,uint num_models);
 
 
 void set_node_texture_asset_by_name(NodeStack *ns, GenModel *genmodel, const char* node_name, texture_asset tex) {
@@ -468,7 +491,6 @@ void set_node_texture_asset_by_name(NodeStack *ns, GenModel *genmodel, const cha
 		}
 	}
 }
-
 
 
 struct texture_asset to_texture_asset(unsigned int value) {
@@ -504,7 +526,7 @@ Texture_Asset_Manager gather_texture_assets() {
 			continue;
 		}
 		
-		char dirnamebuffer[strlen(directory_entry->d_name) + sizeof("../textures")];
+		char dirnamebuffer[strlen(directory_entry->d_name) + sizeof("../textures/")];
 		sprintf(dirnamebuffer, "../textures/%s", directory_entry->d_name);
 		
 		if (stbi_info(dirnamebuffer, &texwidth, &texheight, &texn)) {
@@ -2129,6 +2151,7 @@ GenModel * gma,
 v3 * model_scales,
 uint num_models)
 {
+	START_TIME;
 	render_Info_Skin_oldgl(
 		rectx,
 		ns,
@@ -2142,6 +2165,7 @@ uint num_models)
 		ss,gma,
 		model_scales,
 		num_models);
+	END_TIME;
 }
 
 
@@ -2166,13 +2190,13 @@ void calc_glo(NodeStack ns, GenModel dm, Transform world_transform) {
 
 
 void calculate_object_transforms(NodeStack ns, GenModel * gma, Transform * world_transforms, uint num_models) {
-	
+	START_TIME;
 	for (int i = 0; i < num_models; ++i)
 	{
 		calc_glo(ns, gma[i], world_transforms[i]);
 	}
+	END_TIME;
 }
-
 
 // TODO: add a "last index", from which we can search fore the next frame
 void animate_nodes(
@@ -2479,7 +2503,7 @@ CombinedAnimationState c_animstate)
 
 // TODO: this is just a test with 2 mixed animations
 // should be careful with those weights when expanding it
-void animate_model_test(
+static void animate_model_test(
 NodeStack * ns_src,
 GenModel gm_src,
 NodeStack * ns_result,
@@ -2487,7 +2511,7 @@ GenModel gm_result,
 AnimStack * as,
 CombinedAnimationState c_animstate)
 {
-    
+    START_TIME;
 	//printf("entering animate_models_test\n");
 	
 	//printf("animation_states selected %i , %i\n",c_animstate.animation_states[0].anim_index, c_animstate.animation_states[1].anim_index );
@@ -2531,6 +2555,7 @@ CombinedAnimationState c_animstate)
 			c_animstate.weight.Elements[0]);
         
 	}
+	END_TIME;
 }
 
 // TODO: could have a lighter version of genmodel extra for the purpose of just node-hierachies
@@ -2548,7 +2573,7 @@ GenModel * gm_dest)
 	(*gm_dest) = gm_src;
 	gm_dest->node_idx = ns_dest->next_n;
     
-	for (int i = 0; i < gm_src.num_nodes ; ++i)
+	for (int i = 0; i < gm_src.num_nodes; ++i)
 	{
         ns_dest->name_indices[ns_dest->next_n] = ns_src.name_indices[gm_src.node_idx+i];
 		ns_dest->nodes[ns_dest->next_n] = ns_src.nodes[gm_src.node_idx+i];

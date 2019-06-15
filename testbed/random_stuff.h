@@ -1,15 +1,5 @@
 // Just some random stuff that was in main taken here to declutter main
 
-
-// A quick dataype for having somewhere to store one-off strings,
-// gets cleaned every frame
-typedef struct StringStack {
-	char* chars;
-	uint next_string;
-} 
-StringStack;
-
-
 typedef struct CameraState {
 	mat4 projection;
 	mat4 inv_projection;
@@ -25,7 +15,7 @@ typedef struct CameraState {
 typedef struct PlayerState {
 	v3 character_point;
 	v3 character_model_point;
-	float character_downwards_speed;
+	v3 character_velocity;
 	
 	v3 relative_character_ray_origin;
 	v3 character_ray_direction;
@@ -37,6 +27,9 @@ typedef struct PlayerState {
 	
 	bool is_jumping;
 	bool on_ground;
+	bool on_platform;
+	
+	v3 character_platform_velocity;
 	
 	baka_capsule player_capsule;
 	
@@ -63,11 +56,12 @@ typedef struct PlayerState {
 	float previous_time;
 } PlayerState;
 
-
 // basically all ressources for the step are inside of this struct
 typedef struct Game_Struct {
 	GLFWwindow* window;
 	struct nk_context *ctx;
+	
+	mu_Context *mu_ctx;
 	
 	GameAssets assets;
 	
@@ -75,13 +69,15 @@ typedef struct Game_Struct {
 	char static_level_file_name[PATH_MAX];
 	NodeStack ns_instances;
 	
+	GenModel *models_to_render;
+	v3 *models_to_render_scales;
+	uint next_model_to_render;
+	uint max_models_to_render;
+	
+	Game_Points game_points;
+	
 	LevelStatic level_static;
 	Terrain terra;
-	
-	baka_capsule *caps;
-	v3 *cap_positions;
-	Quat * cap_rotations;
-	int num_cap;
 	
 	EditorState es;
 	PlayerState ps;
@@ -101,11 +97,16 @@ typedef struct Game_Struct {
 	
 	Key_Struct keys;
 	
-	StringStack string_stack;
-	
 	mush_draw_list dbg_list;
 	mush_draw_list dbg_list_non_cleared;
 	mush_draw_list dbg_list_static;
+	
+	Perf_Measurement gamestep_perf_msr[1024];
+	uint num_gamestep_perf_msr;
+	
+	void (*sample_func_p) (void); 
+	
+	FP_Struct fp_struct;
 } Game_Struct;
 
 
@@ -230,16 +231,22 @@ Key_Struct processInput(GLFWwindow *window, Key_Struct lastk)
 	k.j_key = processKey(window, lastk.j_key, key_f, GLFW_KEY_J);
 	k.n_key = processKey(window, lastk.n_key, key_f, GLFW_KEY_N);
 	k.m_key = processKey(window, lastk.m_key, key_f, GLFW_KEY_M);
-	//k.r_key = processKey(window, lastk.r_key, key_f, GLFW_KEY_R);
+	k.r_key = processKey(window, lastk.r_key, key_f, GLFW_KEY_R);
 	k.t_key = processKey(window, lastk.t_key, key_f, GLFW_KEY_T);
 	k.p_key = processKey(window, lastk.p_key, key_f, GLFW_KEY_P);
-	k.F10_key = processKey(window, lastk.F10_key, key_f, GLFW_KEY_F10);
+	
+	k.shift_key = processKey(window, lastk.p_key, key_f, GLFW_KEY_LEFT_SHIFT);
 	
 	k.F1_key = processKey(window, lastk.F1_key, key_f, GLFW_KEY_F1);
 	k.F2_key = processKey(window, lastk.F2_key, key_f, GLFW_KEY_F2);
 	k.F3_key = processKey(window, lastk.F3_key, key_f, GLFW_KEY_F3);
 	k.F4_key = processKey(window, lastk.F4_key, key_f, GLFW_KEY_F4);
 	k.F5_key = processKey(window, lastk.F5_key, key_f, GLFW_KEY_F5);
+	k.F6_key = processKey(window, lastk.F6_key, key_f, GLFW_KEY_F6);
+	k.F7_key = processKey(window, lastk.F7_key, key_f, GLFW_KEY_F7);
+	k.F8_key = processKey(window, lastk.F8_key, key_f, GLFW_KEY_F8);
+	k.F9_key = processKey(window, lastk.F9_key, key_f, GLFW_KEY_F9);
+	k.F10_key = processKey(window, lastk.F10_key, key_f, GLFW_KEY_F10);
 	
 	double xpos, ypos;
 	glfwGetCursorPos(window, &k.xpos, &k.ypos);
@@ -967,11 +974,79 @@ void create_clipped_decal_mesh(LevelStatic *level_static, baka_OBB obb) {
 	
 }
 
+
+bool raycast_body(GameAssets *assets, baka_Body phys, Transform transform, v3 scale, v3 ray_origin, v3 ray_direction, float *tmin_ret, v3 *normal_ret) {
+	
+	baka_Shape_Stack *prototype_static_objects = &assets->prototype_static_objects ;
+	
+	bool didhit_return = false;
+	
+	float tmin;
+	v3 tempnormal;
+	
+	float minimum_tmin = INFINITY;
+	v3 hitnormal;
+	
+	v3 mid = transform.translation;
+	Quat rot = transform.rotation;
+	
+	for (int j = 0; j < phys.num_shapes; j++) {
+		baka_Shape next_object = prototype_static_objects->els[phys.shape_index + j];
+		
+		if(next_object.type_id == PHYS_OBB) {
+			baka_OBB new_obb = baka_make_OBB(add_v3(rotate_vec3_quat(mul_v3(next_object.obb.mid, scale), rot), mid), mul_v3(next_object.obb.ex, scale), mul_quat(next_object.obb.rot, rot));
+			
+			bool didhit_obb = baka_raycast_obb_get_normal(ray_origin, ray_direction, new_obb, &tmin, &tempnormal);
+			
+			if (didhit_obb && tmin < minimum_tmin && tmin >= 0.0f) {
+				minimum_tmin = tmin;
+				hitnormal = tempnormal;
+				didhit_return = true;
+			}
+			
+		}
+		
+		if(next_object.type_id == PHYS_SPHERE) {
+			baka_sphere new_sphere = baka_make_sphere(add_v3(rotate_vec3_quat( mul_v3f(next_object.sphere.center, scale.X), rot), mid), next_object.sphere.radius * scale.X);
+			
+			bool didhit_sphere = baka_raycast_sphere_get_normal(ray_origin, ray_direction, new_sphere, &tmin, &tempnormal);
+			
+			if (didhit_sphere && tmin < minimum_tmin && tmin >= 0.0f) {
+				minimum_tmin = tmin;
+				hitnormal = tempnormal;
+				didhit_return = true;
+			}
+			
+		}
+		
+		if(next_object.type_id == PHYS_TRIANGLE) {
+			baka_triangle new_tri;
+			new_tri.a = add_v3(rotate_vec3_quat( mul_v3(next_object.tri.a, scale), rot), mid);
+			new_tri.b = add_v3(rotate_vec3_quat( mul_v3(next_object.tri.b, scale), rot), mid);
+			new_tri.c = add_v3(rotate_vec3_quat( mul_v3(next_object.tri.c, scale), rot), mid);
+			
+			bool didhit_tri = baka_raycast_triangle_get_normal(ray_origin, ray_direction, new_tri, &tmin, &tempnormal);
+			
+			if (didhit_tri && tmin < minimum_tmin && tmin >= 0.0f) {
+				minimum_tmin = tmin;
+				hitnormal = tempnormal;
+				didhit_return = true;
+			}
+		}
+	}
+	
+	*tmin_ret = minimum_tmin;
+	*normal_ret = hitnormal;
+	
+	return didhit_return;
+}
+
+
 // TODO: we can definitely make the call to a raycast simpler now
-// NOTE: closest_id was the index of the closest physics object in the entity_phys
-// but we changed it be provided id, (which most often reflects the entity number in level_static)
-bool raycast_return_normal_and_ids(LevelStatic level_static, PrototypeStack prototypes, baka_StaticObjects prototype_static_objects,
-								   baka_aabb_binary_tree *tree, v3 ray_origin, v3 ray_direction, float *tmin_ret, v3 *normal_ret, uint64_t *collision_ids, int *collision_ids_count, int collision_ids_max, uint64_t *closest_id) {
+bool raycast_entity_collection_return_normal_and_ids(GameAssets *assets, Entity_Collection *col, v3 ray_origin, v3 ray_direction, float *tmin_ret, v3 *normal_ret, uint64_t *collision_ids, int *collision_ids_count, int collision_ids_max, uint64_t *closest_id) {
+	
+	baka_Shape_Stack *prototype_static_objects = &assets->prototype_static_objects;
+	PrototypeStack *prototypes = &assets->prototypes;
 	bool didhit_return = false;
 	
 	float tmin;
@@ -981,66 +1056,27 @@ bool raycast_return_normal_and_ids(LevelStatic level_static, PrototypeStack prot
 	v3 hitnormal;
 	
 	bool didhit = baka_raycast_tree_return_normal(
-		tree, ray_origin, ray_direction, &tmin, &tempnormal, collision_ids, collision_ids_count, collision_ids_max);
+		&col->tree, ray_origin, ray_direction, &tmin, &tempnormal, collision_ids, collision_ids_count, collision_ids_max);
 	
 	for (int i = 0; i < *collision_ids_count; i++) {
 		uint64_t col_id = collision_ids[i]; 
 		
-		StaticLevelEntity to_test = level_static.level_entities[col_id];
-		EntityPhysics entity_phys = prototypes.static_prototypes[to_test.prototype_index].entity_phys;
+		Base_Entity to_test = col->els[col_id];
+		baka_Body body = prototypes->prototypes[to_test.prototype_index].body;
 		
 		v3 mid = to_test.transform.translation;
 		Quat rot = to_test.transform.rotation;
 		v3 scale = to_test.scale;
 		
-		for (int j = 0; j < entity_phys.num_objects; j++) {
-			baka_static_object next_object = prototype_static_objects.objects[entity_phys.object_index + j];
-			
-			if(next_object.type_id == PHYS_OBB) {
-				baka_OBB new_obb = baka_make_OBB(add_v3(rotate_vec3_quat(mul_v3(next_object.obb.mid, scale), rot), mid), mul_v3(next_object.obb.ex, scale), mul_quat(next_object.obb.rot, rot));
-				
-				
-				bool didhit_obb = baka_raycast_obb_get_normal(ray_origin, ray_direction, new_obb, &tmin, &tempnormal);
-				
-				if (didhit_obb && tmin < minimum_tmin && tmin >= 0.0f) {
-					*closest_id = col_id;
-					minimum_tmin = tmin;
-					hitnormal = tempnormal;
-					didhit_return = true;
-				}
-				
-			}
-			
-			if(next_object.type_id == PHYS_SPHERE) {
-				baka_sphere new_sphere = baka_make_sphere(add_v3(rotate_vec3_quat( mul_v3f(next_object.sphere.center, scale.X), rot), mid), next_object.sphere.radius * scale.X);
-				
-				bool didhit_sphere = baka_raycast_sphere_get_normal(ray_origin, ray_direction, new_sphere, &tmin, &tempnormal);
-				
-				if (didhit_sphere && tmin < minimum_tmin && tmin >= 0.0f) {
-					*closest_id = col_id;
-					minimum_tmin = tmin;
-					hitnormal = tempnormal;
-					didhit_return = true;
-				}
-				
-			}
-			
-			if(next_object.type_id == PHYS_TRIANGLE) {
-				baka_triangle new_tri;
-				new_tri.a = add_v3(rotate_vec3_quat( mul_v3(next_object.tri.a, scale), rot), mid);
-				new_tri.b = add_v3(rotate_vec3_quat( mul_v3(next_object.tri.b, scale), rot), mid);
-				new_tri.c = add_v3(rotate_vec3_quat( mul_v3(next_object.tri.c, scale), rot), mid);
-				
-				bool didhit_tri = baka_raycast_triangle_get_normal(ray_origin, ray_direction, new_tri, &tmin, &tempnormal);
-				
-				if (didhit_tri && tmin < minimum_tmin && tmin >= 0.0f) {
-					*closest_id = col_id;
-					minimum_tmin = tmin;
-					hitnormal = tempnormal;
-					didhit_return = true;
-				}
-			}
+		bool entity_hit = raycast_body(assets, body, to_test.transform, to_test.scale, ray_origin, ray_direction, &tmin, &tempnormal);
+		
+		if (entity_hit && tmin < minimum_tmin && tmin >= 0.0f) {
+			*closest_id = col_id;
+			minimum_tmin = tmin;
+			hitnormal = tempnormal;
+			didhit_return = true;
 		}
+		
 	}
 	*tmin_ret = minimum_tmin;
 	*normal_ret = hitnormal;
@@ -1048,23 +1084,22 @@ bool raycast_return_normal_and_ids(LevelStatic level_static, PrototypeStack prot
 	return didhit_return;
 }
 
-
-bool raycast_return_normal(LevelStatic level_static, PrototypeStack prototypes, baka_StaticObjects prototype_static_objects,
-						   baka_aabb_binary_tree *tree, v3 ray_origin, v3 ray_direction, float *tmin_ret, v3 *normal_ret, uint64_t *id_ret) {
+static bool raycast_entity_collection_return_normal(GameAssets *assets, Entity_Collection *col, v3 ray_origin, v3 ray_direction, float *tmin_ret, v3 *normal_ret, uint64_t *id_ret) {
+	START_TIME;
 	// TODO: Just saying 50  ain't right, think of something better
 	int collision_ids_max = 50;
 	uint64_t collision_ids[collision_ids_max];
 	int collision_ids_count = 0;
-	
-	return raycast_return_normal_and_ids(level_static, prototypes, prototype_static_objects,
-										 tree, ray_origin, ray_direction, tmin_ret, normal_ret, collision_ids, &collision_ids_count, collision_ids_max, id_ret);
+	bool ret = raycast_entity_collection_return_normal_and_ids(assets, col, ray_origin, ray_direction, tmin_ret, normal_ret, collision_ids, &collision_ids_count, collision_ids_max, id_ret);
+	END_TIME;
+	return ret; 
 }
 
-// creates collision points of the capsule with the level
-void collide_capsule(LevelStatic level_static, PrototypeStack prototypes, baka_StaticObjects prototype_static_objects,
-					 baka_aabb_binary_tree *tree, baka_capsule *capsule, v3 capsule_position, Quat capsule_rotation) {
-	
-	capsule->num_contacts = 0;
+
+// creates collision points of the capsule with some entity_collection
+void collide_capsule_entity_collection(GameAssets *assets, Entity_Collection *col, baka_capsule *capsule, v3 capsule_position, Quat capsule_rotation) {
+	START_TIME;
+	//capsule->num_contacts = 0;
 	
 	int collision_ids_max = 50;
 	uint64_t collision_ids[collision_ids_max];
@@ -1073,20 +1108,20 @@ void collide_capsule(LevelStatic level_static, PrototypeStack prototypes, baka_S
 	baka_AABB capsule_aabb = aabb_from_capsule(*capsule, capsule_position, capsule_rotation);
 	
 	baka_aabb_find_contacts_tree(
-		tree, &capsule_aabb, collision_ids, &collision_ids_count, collision_ids_max);
+		&col->tree, &capsule_aabb, collision_ids, &collision_ids_count, collision_ids_max);
 	
 	for (int i = 0; i < collision_ids_count; i++) {
 		uint64_t col_id = collision_ids[i]; 
 		
-		StaticLevelEntity to_test = level_static.level_entities[col_id];
-		EntityPhysics entity_phys = prototypes.static_prototypes[to_test.prototype_index].entity_phys;
+		Base_Entity b = col->els[col_id];
+		baka_Body body = assets->prototypes.prototypes[b.prototype_index].body;
 		
-		v3 mid = to_test.transform.translation;
-		Quat rot = to_test.transform.rotation;
-		v3 scale = to_test.scale;
+		v3 mid = b.transform.translation;
+		Quat rot = b.transform.rotation;
+		v3 scale = b.scale;
 		
-		for (int j = 0; j < entity_phys.num_objects; j++) {
-			baka_static_object next_object = prototype_static_objects.objects[entity_phys.object_index + j];
+		for (int j = 0; j < body.num_shapes; j++) {
+			baka_Shape next_object = assets->prototype_static_objects.els[body.shape_index + j];
 			
 			if(next_object.type_id == PHYS_OBB) {
 				baka_OBB new_obb = baka_make_OBB(add_v3(rotate_vec3_quat(mul_v3(next_object.obb.mid, scale), rot), mid), mul_v3(next_object.obb.ex, scale), mul_quat(next_object.obb.rot, rot));
@@ -1127,61 +1162,274 @@ void collide_capsule(LevelStatic level_static, PrototypeStack prototypes, baka_S
 			}
 		}
 	}
-	
+	END_TIME;
 	return;
 }
 
 
-// show info about some genmodel such as its Nodes and corresponding transforms
-void ui_show_genmodel(struct nk_context *ctx, GenModel *gm, NodeStack *ns, StringStack *ss, GenMeshStack *gms) {
+void new_character_resolution(baka_capsule *cap, v3 *cap_positions, Quat * cap_rotations,v3 * cap_displacement, int num_cap) {
+	START_TIME;
 	
-	if (nk_begin(ctx, "info", nk_rect(5, 160, 250, 300),
-				 NK_WINDOW_BORDER|NK_WINDOW_SCALABLE))
-	{
-		nk_layout_row_dynamic(ctx, 20, 1);
+	baka_aabb_binary_tree cap_tree;
+	aabb_tree_node nds[num_cap*2];
+	int fi[num_cap*2];
+	cap_tree.nodes = nds;
+	cap_tree.root_node_index = -1;
+	cap_tree.max_object = num_cap*2;
+	cap_tree.next_object = 0;
+	cap_tree.free_indices = fi;
+	cap_tree.next_free_index = 0;
+	
+	for (int i = 0; i < num_cap; i++) {
+		baka_capsule * cap_i = &cap[i]; 
+		v3 p1 = add_v3(rotate_vec3_quat(cap_i->p, cap_rotations[i]), cap_positions[i]);
+		v3 q1 = add_v3(rotate_vec3_quat(cap_i->q, cap_rotations[i]), cap_positions[i]);
 		
-		for(int i = 0; i < gm->num_nodes ; i++) {
+		baka_AABB i_aabb = aabb_from_capsule(*cap_i, cap_positions[i], cap_rotations[i]);
+		
+		int collision_ids_max = 50;
+		uint64_t collision_ids[collision_ids_max];
+		int collision_ids_count = 0;
+		
+		baka_aabb_find_contacts_tree(&cap_tree, &i_aabb, collision_ids, &collision_ids_count, collision_ids_max);
+		
+		int node_index_i = tree_insert_aabb(&cap_tree, i_aabb, i);
+		
+		for (int j = 0; j < collision_ids_count; j++) {
+			int cap_j_idx = collision_ids[j];
+			baka_capsule * cap_j = &cap[cap_j_idx];
 			
-			const char* index_string = &ss->chars[ss->next_string];
-			ss->next_string += 1+sprintf(&ss->chars[ss->next_string], "node id: %i", i);
+			v3 p2 = add_v3(rotate_vec3_quat(cap_j->p, cap_rotations[cap_j_idx]), cap_positions[cap_j_idx]);
+			v3 q2 = add_v3(rotate_vec3_quat(cap_j->q, cap_rotations[cap_j_idx]), cap_positions[cap_j_idx]);
 			
-			const char* parent_string = &ss->chars[ss->next_string];
-			ss->next_string += 1+sprintf(&ss->chars[ss->next_string], " par id: %i", ns->parent[gm->node_idx + i]);
+			float s;
+			float t;
+			v3 c1;
+			v3 c2;
 			
-			int name_index = ns->name_indices[gm->node_idx+i];
-			const char* node_name = (const char*)ns->names[name_index].chars;
+			float ret_len = baka_closestpt_segment_segment(p1, q1, p2, q2, &s, &t, &c1, &c2);
+			float combined_radius = cap_i->radius + cap_j->radius;
 			
-			const char*  mesh_string = &ss->chars[ss->next_string];
-			ss->next_string += 1+sprintf(&ss->chars[ss->next_string], "  mesh id: %i", ns->nodes[gm->node_idx + i].mesh);
+			v3 c1_to_c2 = sub_v3(c1, c2);
+			v3 c2_to_c1 = sub_v3(c2, c1);
 			
-			const char* skin_string = &ss->chars[ss->next_string];ss->next_string += 1+sprintf(&ss->chars[ss->next_string], "  skin id: %i", ns->nodes[gm->node_idx + i].skin);
+			float c1_to_c2_sqlen = dot_v3(c1_to_c2, c1_to_c2);
+			float c1_to_c2_len = HMM_SquareRootF(c1_to_c2_sqlen);
+			float c1_to_cap_j_len = c1_to_c2_len - cap_j->radius;
+			float c2_to_cap_i_len = c1_to_c2_len - cap_i->radius;
 			
-			const char* texture_asset_string = &ss->chars[ss->next_string];ss->next_string += 1+sprintf(&ss->chars[ss->next_string], "  texture_asset: type %i nr %i", ns->texture_assets[gm->node_idx + i].type, ns->texture_assets[gm->node_idx + i].nr);
-			
-			const char* transf_transl_string = &ss->chars[ss->next_string];ss->next_string += 1+sprintf(&ss->chars[ss->next_string], "  loc: %f %f %f", ns->nodes[gm->node_idx + i].loc_transform.translation.X, ns->nodes[gm->node_idx + i].loc_transform.translation.Y, ns->nodes[gm->node_idx + i].loc_transform.translation.Z);
-			
-			const char* object_transl_string = &ss->chars[ss->next_string];ss->next_string += 1+sprintf(&ss->chars[ss->next_string], "  obj: %f %f %f", ns->nodes[gm->node_idx + i].object_transform.translation.X, ns->nodes[gm->node_idx + i].object_transform.translation.Y, ns->nodes[gm->node_idx + i].object_transform.translation.Z);
-			
-			nk_label(ctx, index_string, NK_TEXT_LEFT);
-			nk_label(ctx, node_name, NK_TEXT_LEFT);
-			nk_label(ctx, parent_string, NK_TEXT_LEFT);
-			
-			nk_label(ctx, mesh_string, NK_TEXT_LEFT);
-			if(ns->nodes[gm->node_idx + i].mesh != -1) {
-				const char* mesh_name = (const char *)gms->names[gm->mesh_idx + ns->nodes[gm->node_idx + i].mesh].chars;
-				
-				nk_label(ctx, mesh_name, NK_TEXT_LEFT);
+			if (c1_to_cap_j_len > cap_i->radius) {
+				continue;
 			}
 			
+			if (c2_to_cap_i_len > cap_j->radius) {
+				continue;
+			}
 			
-			nk_label(ctx, skin_string, NK_TEXT_LEFT);
-			nk_label(ctx, texture_asset_string, NK_TEXT_LEFT);
-			nk_label(ctx, transf_transl_string, NK_TEXT_LEFT);
-			nk_label(ctx, object_transl_string, NK_TEXT_LEFT);
+			float penetration_depth_i = c1_to_cap_j_len - cap_i->radius;
+			float penetration_depth_j = c2_to_cap_i_len - cap_j->radius;
 			
+			if (cap_i->num_dyn_contacts < MAX_CONTACTS) {
+				
+				cap_i->dyn_contacts[cap_i->num_dyn_contacts].point = add_v3(c1, mul_v3f(normalize_v3(c1_to_c2), cap_i->radius));
+				cap_i->dyn_contacts[cap_i->num_dyn_contacts].normal = normalize_v3(c1_to_c2);
+				cap_i->dyn_contacts[cap_i->num_dyn_contacts].depth = penetration_depth_i;
+				cap_i->dyn_contacts[cap_i->num_dyn_contacts].broken = 0;
+				cap_i->num_dyn_contacts++;
+			}
+			
+			if (cap_j->num_dyn_contacts < MAX_CONTACTS) {
+				// TODO: this can be optimized by using calculate results from cap_i
+				cap_j->dyn_contacts[cap_j->num_dyn_contacts].point = add_v3(c2, mul_v3f(normalize_v3(c2_to_c1), cap_j->radius));
+				cap_j->dyn_contacts[cap_j->num_dyn_contacts].normal = normalize_v3(c2_to_c1);
+				cap_j->dyn_contacts[cap_j->num_dyn_contacts].depth = penetration_depth_j;
+				cap_j->dyn_contacts[cap_j->num_dyn_contacts].broken = 0;
+				cap_j->num_dyn_contacts++;
+			}
 		}
+		
+		/*
+  for (int j = i+1; j < num_cap; j++) {
+   baka_capsule * cap_j = &cap[j];
+   
+   v3 p2 = add_v3(rotate_vec3_quat(cap_j->p, cap_rotations[j]), cap_positions[j]);
+   v3 q2 = add_v3(rotate_vec3_quat(cap_j->q, cap_rotations[j]), cap_positions[j]);
+   
+   float s;
+   float t;
+   v3 c1;
+   v3 c2;
+   
+   float ret_len = baka_closestpt_segment_segment(p1, q1, p2, q2, &s, &t, &c1, &c2);
+   float combined_radius = cap_i->radius + cap_j->radius;
+   
+   v3 c1_to_c2 = sub_v3(c1, c2);
+   v3 c2_to_c1 = sub_v3(c2, c1);
+   
+   float c1_to_c2_sqlen = dot_v3(c1_to_c2, c1_to_c2);
+   float c1_to_c2_len = HMM_SquareRootF(c1_to_c2_sqlen);
+   float c1_to_cap_j_len = c1_to_c2_len - cap_j->radius;
+   float c2_to_cap_i_len = c1_to_c2_len - cap_i->radius;
+   
+   if (c1_to_cap_j_len > cap_i->radius) {
+ continue;
+   }
+   
+   if (c2_to_cap_i_len > cap_j->radius) {
+ continue;
+   }
+   
+   float penetration_depth_i = c1_to_cap_j_len - cap_i->radius;
+   float penetration_depth_j = c2_to_cap_i_len - cap_j->radius;
+   
+   if (cap_i->num_dyn_contacts < MAX_CONTACTS) {
+   
+ cap_i->dyn_contacts[cap_i->num_dyn_contacts].point = add_v3(c1, mul_v3f(normalize_v3(c1_to_c2), cap_i->radius));
+ cap_i->dyn_contacts[cap_i->num_dyn_contacts].normal = normalize_v3(c1_to_c2);
+ cap_i->dyn_contacts[cap_i->num_dyn_contacts].depth = penetration_depth_i;
+ cap_i->dyn_contacts[cap_i->num_dyn_contacts].broken = 0;
+ cap_i->num_dyn_contacts++;
+   }
+   
+   if (cap_j->num_dyn_contacts < MAX_CONTACTS) {
+ // TODO: this can be optimized by using calculate results from cap_i
+ cap_j->dyn_contacts[cap_j->num_dyn_contacts].point = add_v3(c2, mul_v3f(normalize_v3(c2_to_c1), cap_j->radius));
+ cap_j->dyn_contacts[cap_j->num_dyn_contacts].normal = normalize_v3(c2_to_c1);
+ cap_j->dyn_contacts[cap_j->num_dyn_contacts].depth = penetration_depth_j;
+ cap_j->dyn_contacts[cap_j->num_dyn_contacts].broken = 0;
+ cap_j->num_dyn_contacts++;
+   }
+  }*/
 	}
-	nk_end(ctx);
+	END_TIME;
+}
+
+
+/*
+// creates collision points of the capsule with the level
+void collide_capsule(LevelStatic level_static, PrototypeStack prototypes, baka_Shape_Stack prototype_static_objects,
+   baka_aabb_binary_tree *tree, baka_capsule *capsule, v3 capsule_position, Quat capsule_rotation) {
+ START_TIME;
+ //capsule->num_contacts = 0;
+ 
+ int collision_ids_max = 50;
+ uint64_t collision_ids[collision_ids_max];
+ int collision_ids_count = 0;
+ 
+ baka_AABB capsule_aabb = aabb_from_capsule(*capsule, capsule_position, capsule_rotation);
+ 
+ baka_aabb_find_contacts_tree(
+  tree, &capsule_aabb, collision_ids, &collision_ids_count, collision_ids_max);
+  
+ for (int i = 0; i < collision_ids_count; i++) {
+  uint64_t col_id = collision_ids[i]; 
+  
+  StaticLevelEntity to_test = level_static.level_entities[col_id];
+  baka_Body body = prototypes.prototypes[to_test.prototype_index].body;
+  
+  v3 mid = to_test.transform.translation;
+  Quat rot = to_test.transform.rotation;
+  v3 scale = to_test.scale;
+  
+  for (int j = 0; j < body.num_shapes; j++) {
+   baka_Shape next_object = prototype_static_objects.els[body.shape_index + j];
+   
+   if(next_object.type_id == PHYS_OBB) {
+ baka_OBB new_obb = baka_make_OBB(add_v3(rotate_vec3_quat(mul_v3(next_object.obb.mid, scale), rot), mid), mul_v3(next_object.obb.ex, scale), mul_quat(next_object.obb.rot, rot));
+ 
+ baka_does_contact_capsule_obb(
+  capsule,
+  capsule_position,
+  capsule_rotation,
+  new_obb.mid,
+  new_obb.ex,
+  new_obb.rot);
+   }
+   
+   if(next_object.type_id == PHYS_SPHERE) {
+ baka_sphere new_sphere = baka_make_sphere(add_v3(rotate_vec3_quat( mul_v3f(next_object.sphere.center, scale.X), rot), mid), next_object.sphere.radius * scale.X);
+ 
+ baka_does_contact_capsule_sphere(
+  capsule,
+  capsule_position,
+  capsule_rotation,
+  new_sphere.center,
+  new_sphere.radius);
+  
+   }
+   
+   if(next_object.type_id == PHYS_TRIANGLE) {
+ baka_triangle new_tri;
+ new_tri.a = add_v3(rotate_vec3_quat( mul_v3(next_object.tri.a, scale), rot), mid);
+ new_tri.b = add_v3(rotate_vec3_quat( mul_v3(next_object.tri.b, scale), rot), mid);
+ new_tri.c = add_v3(rotate_vec3_quat( mul_v3(next_object.tri.c, scale), rot), mid);
+ 
+ baka_does_contact_capsule_triangle(
+  capsule,
+  capsule_position,
+  capsule_rotation,
+  new_tri);
+  
+   }
+  }
+ }
+ END_TIME;
+ return;
+}
+*/
+
+// show info about some genmodel such as its Nodes and corresponding transforms
+// TODO: make this work again
+void ui_show_genmodel(struct nk_context *ctx, GenModel *gm, NodeStack *ns, String_Stack *ss, GenMeshStack *gms) {
+	/*
+ if (nk_begin(ctx, "info", nk_rect(5, 160, 250, 300),
+  NK_WINDOW_BORDER|NK_WINDOW_SCALABLE))
+ {
+  //nk_layout_row_dynamic(ctx, 20, 1);
+  
+  for(int i = 0; i < gm->num_nodes ; i++) {
+  
+   const char* index_string = &ss->chars[ss->next_string];
+   ss->next_string += 1+sprintf(&ss->chars[ss->next_string], "node id: %i", i);
+   
+   const char* parent_string = &ss->chars[ss->next_string];
+   ss->next_string += 1+sprintf(&ss->chars[ss->next_string], " par id: %i", ns->parent[gm->node_idx + i]);
+   
+   int name_index = ns->name_indices[gm->node_idx+i];
+   const char* node_name = (const char*)ns->names[name_index].chars;
+   
+   const char*  mesh_string = &ss->chars[ss->next_string];
+   ss->next_string += 1+sprintf(&ss->chars[ss->next_string], "  mesh id: %i", ns->nodes[gm->node_idx + i].mesh);
+   
+   const char* skin_string = &ss->chars[ss->next_string];ss->next_string += 1+sprintf(&ss->chars[ss->next_string], "  skin id: %i", ns->nodes[gm->node_idx + i].skin);
+   
+   const char* texture_asset_string = &ss->chars[ss->next_string];ss->next_string += 1+sprintf(&ss->chars[ss->next_string], "  texture_asset: type %i nr %i", ns->texture_assets[gm->node_idx + i].type, ns->texture_assets[gm->node_idx + i].nr);
+   
+   const char* transf_transl_string = &ss->chars[ss->next_string];ss->next_string += 1+sprintf(&ss->chars[ss->next_string], "  loc: %f %f %f", ns->nodes[gm->node_idx + i].loc_transform.translation.X, ns->nodes[gm->node_idx + i].loc_transform.translation.Y, ns->nodes[gm->node_idx + i].loc_transform.translation.Z);
+   
+   const char* object_transl_string = &ss->chars[ss->next_string];ss->next_string += 1+sprintf(&ss->chars[ss->next_string], "  obj: %f %f %f", ns->nodes[gm->node_idx + i].object_transform.translation.X, ns->nodes[gm->node_idx + i].object_transform.translation.Y, ns->nodes[gm->node_idx + i].object_transform.translation.Z);
+   
+   //nk_label(ctx, index_string, NK_TEXT_LEFT);
+   //nk_label(ctx, node_name, NK_TEXT_LEFT);
+   //nk_label(ctx, parent_string, NK_TEXT_LEFT);
+   
+   //nk_label(ctx, mesh_string, NK_TEXT_LEFT);
+   if(ns->nodes[gm->node_idx + i].mesh != -1) {
+ const char* mesh_name = (const char *)gms->names[gm->mesh_idx + ns->nodes[gm->node_idx + i].mesh].chars;
+ 
+ //nk_label(ctx, mesh_name, NK_TEXT_LEFT);
+   }
+   
+   
+   //nk_label(ctx, skin_string, NK_TEXT_LEFT);
+   //nk_label(ctx, texture_asset_string, NK_TEXT_LEFT);
+   //nk_label(ctx, transf_transl_string, NK_TEXT_LEFT);
+   //nk_label(ctx, object_transl_string, NK_TEXT_LEFT);
+   
+  }
+ }
+ nk_end(ctx);
+ */
 }
 
 
