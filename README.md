@@ -17,7 +17,11 @@ The hot code reloading allows for great code iteration of the gameplay code, whi
 
 # basic use:
 
-create a folder in levels and insert a file 'buildlib.sh', which should build a shared object called 'shared.so'.
+Currently only works on Linux.
+Compile by running build.sh in the testbed directory.
+This should probably be enough.
+
+To create a new 'level', create a folder in levels and insert a file 'buildlib.sh', which should build a shared object called 'shared.so'.
 'buildlib.sh' will be called by the engine to build the 'shared.so' when reloading the code.
 This shared object should include at least the functions:
 void init_step(Game_Struct * game);
