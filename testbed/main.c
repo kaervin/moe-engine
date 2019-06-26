@@ -376,8 +376,7 @@ int main(int argc, char *argv[]) {
     
     
     Texture_Asset_Manager texa = gather_texture_assets();
-	// TODO: really annoying bug, if we don't insert the printf we get an illegal instruction (sometimes)
-	printf("dude\n");
+	
     game.assets.tex_ass_man = texa;
 	// here we actually gather and create all the prototypes from the entities directory
 	PrototypeStack prototypes = gather_static_entity_prototypes(&model_memory, &phys_mesh_stack, &prototype_static_objects,&game.assets.tex_ass_man, &prototype_ns);
