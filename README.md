@@ -17,7 +17,11 @@ The hot code reloading allows for great code iteration of the gameplay code, whi
 
 # basic use:
 
-create a folder in levels and insert a file 'buildlib.sh', which should build a shared object called 'shared.so'.
+Currently only works on Linux.
+Compile by running build.sh in the testbed directory.
+This should probably be enough.
+
+To create a new 'level', create a folder in levels and insert a file 'buildlib.sh', which should build a shared object called 'shared.so'.
 'buildlib.sh' will be called by the engine to build the 'shared.so' when reloading the code.
 This shared object should include at least the functions:
 void init_step(Game_Struct * game);
@@ -35,10 +39,10 @@ This entity collection can be combined with other data to give it more potential
 
 # kinds of files:
 
-'.moe'-files are the model/mesh format of the moe engine (models directory)
-'.entity'-files describe basic entities (entities directory)
-'.level'-files describe the layout of the static objects of a level, and describe a set of named points that can be queried in the code (a usage example being, spawning the player at a point called 'player_spawn')
-'.obj'-files that can be used to describe physical objects via a set of triangles (physic_meshes directory)
+- '.moe'-files are the model/mesh format of the moe engine (models directory)
+- '.entity'-files describe basic entities (entities directory)
+- '.level'-files describe the layout of the static objects of a level, and describe a set of named points that can be queried in the code (a usage example being, spawning the player at a point called 'player_spawn')
+- '.obj'-files that can be used to describe physical objects via a set of triangles (physic_meshes directory)
 
 # functionality:
 
@@ -48,11 +52,11 @@ The whole project is structured around the idea of having a single compilation u
 As such, the code lives in several .h files, grouped under common functionality. The names are partly inside-jokes still.
 Some important ones are:
 
-'render_basic.h' - Most things necessary for rendering, such as models, and node-hierachy related things. Just OpenGL currently.
-'baka.h' - some physics code, such as code for bounding volume hierachies, raycasting, collision detection etc.
-'mushishi.h' - debug rendering
-'hashtable.h' - super barebones hashtable/map (since all strings entering it are in from a controlled environment not much more is necessary for now)
-'functions.h' - some ungrouped general purpose functionality and some useful math
+- 'render_basic.h' - Most things necessary for rendering, such as models, and node-hierachy related things. Just OpenGL currently.
+- 'baka.h' - some physics code, such as code for bounding volume hierachies, raycasting, collision detection etc.
+- 'mushishi.h' - debug rendering
+- 'hashtable.h' - super barebones hashtable/map (since all strings entering it are in from a controlled environment not much more is necessary for now)
+- 'functions.h' - some ungrouped general purpose functionality and some useful math
 
 
 # coming features:
@@ -65,9 +69,9 @@ Some important ones are:
 # thanks!
 
 thanks to the following projects for providing helpful libraries under nice licenses:
-https://github.com/skaslev/gl3w
-https://github.com/HandmadeMath/Handmade-Math
-https://github.com/rxi/microui
-https://github.com/nothings/stb
-https://github.com/RandyGaul/cute_headers
-https://www.glfw.org/
+- https://github.com/skaslev/gl3w
+- https://github.com/HandmadeMath/Handmade-Math
+- https://github.com/rxi/microui
+- https://github.com/nothings/stb
+- https://github.com/RandyGaul/cute_headers
+- https://www.glfw.org/
